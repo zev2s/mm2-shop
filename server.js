@@ -1,1451 +1,614 @@
-(() => {
-  'use strict';
-
-
-  /* =========================
-     PRODUCTS
-  ========================== */
-
-  const products = {
-
-    'BioBlade': {
-      image: 'green_knife.png',
-      rarity: 'GODLY • KNIFE'
-    },
-
-    'Raygun': {
-      image: 'green_gun.png',
-      rarity: 'GODLY • GUN'
-    },
-
-    "Traveler's Gun": {
-      image: 'pumpkin_gun.png',
-      rarity: 'LIMITED • GUN'
-    },
-
-    'Harvester': {
-      image: 'green_bow.png',
-      rarity: 'GODLY • BOW'
-    },
-
-    'Тест': {
-      image: 'green_knife.png',
-      rarity: 'TEST • 2 ₽'
-    }
-
-  };
-
-
-  /* =========================
-     TELEGRAM
-  ========================== */
-
-  const TELEGRAM_CHANNEL =
-    'https://t.me/mm2site';
-
-
-  /* =========================
-     STATE
-  ========================== */
-
-  let currentOrder = null;
-
-  let pollTimer = null;
-
-  let pollStartedAt = 0;
-
-
-
-  /* =========================
-     ESCAPE HTML
-  ========================== */
-
-  const esc = (value) =>
-    String(value ?? '')
-      .replace(
-        /[&<>'"]/g,
-        ch => ({
-          '&': '&amp;',
-          '<': '&lt;',
-          '>': '&gt;',
-          "'": '&#39;',
-          '"': '&quot;'
-        }[ch])
-      );
-
-
-
-  /* =========================
-     CREATE PAYMENT MODAL
-  ========================== */
-
-  function ensureModal() {
-
-    if (
-      document.getElementById(
-        'purchaseModal'
-      )
-    ) {
-      return;
-    }
-
-
-    const modal =
-      document.createElement('div');
-
-
-    modal.id =
-      'purchaseModal';
-
-
-    modal.className =
-      'purchase-modal';
-
-
-    modal.innerHTML = `
-
-      <div
-        class="purchase-overlay"
-        data-close="1"
-      ></div>
-
-
-      <div
-        class="purchase-window"
-        role="dialog"
-        aria-modal="true"
-      >
-
-        <button
-          class="close-purchase"
-          type="button"
-          aria-label="Закрыть"
-        >
-          ×
-        </button>
-
-
-        <div class="purchase-image-box">
-
-          <img
-            id="purchaseImage"
-            src=""
-            alt="Товар"
-          >
-
-        </div>
-
-
-        <div
-          class="purchase-rarity"
-          id="purchaseRarity"
-        >
-          MM2 ITEM
-        </div>
-
-
-        <h2 id="purchaseTitle">
-          Товар
-        </h2>
-
-
-        <div class="purchase-price">
-
-          <span>
-            Цена
-          </span>
-
-          <strong id="purchasePrice">
-            0 ₽
-          </strong>
-
-        </div>
-
-
-
-        <!-- PAYMENT -->
-
-        <div
-          id="paymentStep"
-          class="payment-step"
-        >
-
-          <div
-            class="payment-status waiting"
-            id="paymentStatus"
-          >
-
-            <span class="payment-dot"></span>
-
-            <div>
-
-              <b>
-                Ожидаем оплату
-              </b>
-
-              <small id="paymentHint">
-                Сначала оплати товар через ЮMoney.
-              </small>
-
-            </div>
-
-          </div>
-
-
-          <button
-            class="submit-purchase payment-button"
-            id="payButton"
-            type="button"
-          >
-            💳 Оплатить через ЮMoney
-          </button>
-
-
-          <p
-            class="purchase-note"
-            id="normalPaymentNote"
-          >
-            После оплаты сайт автоматически получит
-            подтверждение от ЮMoney.
-            Нажимать «Я оплатил» не нужно.
-          </p>
-
-        </div>
-
-
-
-        <!-- USER DATA -->
-
-        <form
-          id="userDataStep"
-          class="purchase-form"
-          style="display:none"
-        >
-
-          <div
-            class="payment-status paid"
-            id="paidStatus"
-          >
-
-            <span class="payment-dot"></span>
-
-            <div>
-
-              <b>
-                Оплата подтверждена ✓
-              </b>
-
-              <small>
-                Теперь укажи данные для получения заказа.
-              </small>
-
-            </div>
-
-          </div>
-
-
-          <label for="telegramInput">
-            Telegram
-          </label>
-
-
-          <input
-            id="telegramInput"
-            name="telegram"
-            type="text"
-            maxlength="80"
-            placeholder="@username"
-            autocomplete="off"
-            required
-          >
-
-
-          <label for="nicknameInput">
-            Roblox ник
-          </label>
-
-
-          <input
-            id="nicknameInput"
-            name="nickname"
-            type="text"
-            maxlength="80"
-            placeholder="Твой Roblox ник"
-            autocomplete="off"
-            required
-          >
-
-
-          <button
-            class="submit-purchase"
-            type="submit"
-          >
-            ✅ Оформить заказ
-          </button>
-
-
-          <p class="purchase-note">
-            Заказ отправится владельцу только
-            после подтверждённой оплаты.
-          </p>
-
-        </form>
-
-      </div>
-    `;
-
-
-    document.body.appendChild(modal);
-
-
-    /* CLOSE */
-
-    modal
-      .querySelector(
-        '.close-purchase'
-      )
-      .addEventListener(
-        'click',
-        closeModal
-      );
-
-
-    modal
-      .querySelector(
-        '.purchase-overlay'
-      )
-      .addEventListener(
-        'click',
-        closeModal
-      );
-
-
-    /* PAYMENT */
-
-    modal
-      .querySelector(
-        '#payButton'
-      )
-      .addEventListener(
-        'click',
-        beginPayment
-      );
-
-
-    /* FORM */
-
-    modal
-      .querySelector(
-        '#userDataStep'
-      )
-      .addEventListener(
-        'submit',
-        submitUserData
-      );
-
-  }
-
-
-
-  /* =========================
-     OPEN MODAL
-  ========================== */
-
-  function openModal(
-    product,
-    price
-  ) {
-
-    ensureModal();
-
-    stopPolling();
-
-    currentOrder = null;
-
-
-    const data =
-      products[product] || {};
-
-
-    const modal =
-      document.getElementById(
-        'purchaseModal'
-      );
-
-
-    document.getElementById(
-      'purchaseImage'
-    ).src =
-      data.image || '';
-
-
-    document.getElementById(
-      'purchaseRarity'
-    ).textContent =
-      data.rarity ||
-      'MM2 ITEM';
-
-
-    document.getElementById(
-      'purchaseTitle'
-    ).textContent =
-      product;
-
-
-    document.getElementById(
-      'purchasePrice'
-    ).textContent =
-      price;
-
-
-    /* RESET PAYMENT */
-
-    document.getElementById(
-      'paymentStep'
-    ).style.display = '';
-
-
-    document.getElementById(
-      'payButton'
-    ).style.display = '';
-
-
-    document.getElementById(
-      'normalPaymentNote'
-    ).style.display = '';
-
-
-    document.getElementById(
-      'userDataStep'
-    ).style.display = 'none';
-
-
-    document.getElementById(
-      'payButton'
-    ).disabled = false;
-
-
-    document.getElementById(
-      'payButton'
-    ).textContent =
-      '💳 Оплатить через ЮMoney';
-
-
-    setPaymentStatus(
-      'waiting',
-      'Ожидаем оплату',
-      'Сначала оплати товар через ЮMoney.'
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { URL } = require('url');
+
+const PORT = Number(process.env.PORT || 3000);
+
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const YOOMONEY_RECEIVER = process.env.YOOMONEY_RECEIVER || '';
+const YOOMONEY_NOTIFICATION_SECRET =
+    process.env.YOOMONEY_NOTIFICATION_SECRET || '';
+
+const ROOT = __dirname;
+const DATA_DIR = path.join(ROOT, 'data');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+
+if (
+    !ADMIN_PASSWORD ||
+    !YOOMONEY_RECEIVER ||
+    !YOOMONEY_NOTIFICATION_SECRET
+) {
+    console.error(
+        'ERROR: Set ADMIN_PASSWORD, YOOMONEY_RECEIVER and YOOMONEY_NOTIFICATION_SECRET.'
     );
 
+    process.exit(1);
+}
 
-    document.getElementById(
-      'telegramInput'
-    ).value = '';
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
+if (!fs.existsSync(ORDERS_FILE)) {
+    fs.writeFileSync(ORDERS_FILE, '[]', 'utf8');
+}
 
-    document.getElementById(
-      'nicknameInput'
-    ).value = '';
+const sessions = new Map();
 
+let db = null;
 
-    modal.classList.add(
-      'active'
-    );
+/* =========================
+   ТОВАРЫ
+========================= */
 
+const PRODUCTS = {
+    'BioBlade': 39,
+    'Raygun': 399,
+    "Traveler's Gun": 8999,
+    'Harvester': 299,
+    'Тест': 2
+};
 
-    document.body.classList.add(
-      'modal-open'
-    );
+/* =========================
+   DATABASE
+========================= */
 
-  }
-
-
-
-  /* =========================
-     CLOSE MODAL
-  ========================== */
-
-  function closeModal() {
-
-    stopPolling();
-
-
-    const modal =
-      document.getElementById(
-        'purchaseModal'
-      );
-
-
-    if (modal) {
-      modal.classList.remove(
-        'active'
-      );
-    }
-
-
-    document.body.classList.remove(
-      'modal-open'
-    );
-
-  }
-
-
-
-  /* =========================
-     PAYMENT STATUS
-  ========================== */
-
-  function setPaymentStatus(
-    type,
-    title,
-    text
-  ) {
-
-    const box =
-      document.getElementById(
-        'paymentStatus'
-      );
-
-
-    if (!box) {
-      return;
-    }
-
-
-    box.className =
-      `payment-status ${type}`;
-
-
-    box.innerHTML = `
-
-      <span class="payment-dot"></span>
-
-      <div>
-
-        <b>
-          ${esc(title)}
-        </b>
-
-        <small>
-          ${esc(text)}
-        </small>
-
-      </div>
-
-    `;
-
-  }
-
-
-
-  /* =========================
-     BEGIN PAYMENT
-  ========================== */
-
-  async function beginPayment() {
-
-    const button =
-      document.getElementById(
-        'payButton'
-      );
-
-
-    if (
-      currentOrder?.orderId
-    ) {
-
-      openPayment();
-
-      return;
-    }
-
-
-    const product =
-      document
-        .getElementById(
-          'purchaseTitle'
-        )
-        .textContent
-        .trim();
-
-
-    const price =
-      document
-        .getElementById(
-          'purchasePrice'
-        )
-        .textContent
-        .trim();
-
-
-    button.disabled = true;
-
-    button.textContent =
-      '⏳ Создаём платёж...';
-
-
-    try {
-
-      const response =
-        await fetch(
-          '/api/payment/create',
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json'
-            },
-
-            body:
-              JSON.stringify({
-                product,
-                price
-              })
-          }
-        );
-
-
-      const data =
-        await response.json();
-
-
-      if (
-        !response.ok ||
-        !data.success
-      ) {
-
-        throw new Error(
-          data.error ||
-          'Не удалось создать платёж.'
-        );
-
-      }
-
-
-      currentOrder =
-        data;
-
-
-      setPaymentStatus(
-        'waiting',
-        'Платёж открыт',
-        `Сумма: ${data.sum} ₽. Оплати в окне ЮMoney.`
-      );
-
-
-      startPolling(
-        data.orderId
-      );
-
-
-      openPayment();
-
-    } catch (error) {
-
-      console.error(error);
-
-
-      setPaymentStatus(
-        'error',
-        'Ошибка',
-        error.message ||
-        'Не удалось создать платёж.'
-      );
-
-
-      button.disabled = false;
-
-
-      button.textContent =
-        '💳 Попробовать снова';
-
-    }
-
-  }
-
-
-
-  /* =========================
-     OPEN YOOMONEY
-  ========================== */
-
-  function openPayment() {
-
-    if (
-      !currentOrder ||
-      !currentOrder.orderId
-    ) {
-      return;
-    }
-
-
-    const form =
-      document.createElement(
-        'form'
-      );
-
-
-    form.method =
-      'POST';
-
-
-    form.action =
-      'https://yoomoney.ru/quickpay/confirm';
-
-
-    form.target =
-      '_blank';
-
-
-    form.style.display =
-      'none';
-
-
-    const values = {
-
-      receiver:
-        currentOrder.receiver,
-
-      'quickpay-form':
-        'button',
-
-      paymentType:
-        'AC',
-
-      targets:
-        `MM2 SHOP — ${currentOrder.orderId}`,
-
-      sum:
-        currentOrder.sum,
-
-      label:
-        currentOrder.label,
-
-      successURL:
-        `${location.origin}/?payment=success&order=${encodeURIComponent(
-          currentOrder.orderId
-        )}`
-
-    };
-
-
-    Object.entries(
-      values
-    ).forEach(
-      ([name, value]) => {
-
-        const input =
-          document.createElement(
-            'input'
-          );
-
-
-        input.type =
-          'hidden';
-
-
-        input.name =
-          name;
-
-
-        input.value =
-          value ?? '';
-
-
-        form.appendChild(
-          input
-        );
-
-      }
-    );
-
-
-    document.body.appendChild(
-      form
-    );
-
-
-    form.submit();
-
-
-    form.remove();
-
-
-    setPaymentStatus(
-      'waiting',
-      'Платёж открыт',
-      'Оплати в окне ЮMoney. Мы проверяем оплату автоматически.'
-    );
-
-  }
-
-
-
-  /* =========================
-     START POLLING
-  ========================== */
-
-  function startPolling(
-    orderId
-  ) {
-
-    stopPolling();
-
-
-    pollStartedAt =
-      Date.now();
-
-
-    checkPayment(
-      orderId
-    );
-
-
-    pollTimer =
-      setInterval(
-        () =>
-          checkPayment(
-            orderId
-          ),
-        3000
-      );
-
-  }
-
-
-
-  /* =========================
-     STOP POLLING
-  ========================== */
-
-  function stopPolling() {
-
-    if (pollTimer) {
-
-      clearInterval(
-        pollTimer
-      );
-
-    }
-
-
-    pollTimer = null;
-
-  }
-
-
-
-  /* =========================
-     CHECK PAYMENT
-  ========================== */
-
-  async function checkPayment(
-    orderId
-  ) {
-
-    if (!orderId) {
-      return;
-    }
-
-
-    if (
-      Date.now() -
-      pollStartedAt >
-      15 * 60 * 1000
-    ) {
-
-      stopPolling();
-
-
-      setPaymentStatus(
-        'error',
-        'Проверка остановлена',
-        'Если ты уже оплатил, обнови страницу и открой заказ снова.'
-      );
-
-
-      return;
-
-    }
-
-
-    try {
-
-      const response =
-        await fetch(
-          '/api/payment/status?order=' +
-          encodeURIComponent(
-            orderId
-          ),
-          {
-            cache:
-              'no-store'
-          }
-        );
-
-
-      const data =
-        await response.json();
-
-
-      if (
-        !response.ok ||
-        !data.success
-      ) {
+async function initDb() {
+    if (!DATABASE_URL) {
+        console.log('Database: local JSON');
         return;
-      }
-
-
-      if (
-        data.status ===
-        'paid'
-      ) {
-
-        stopPolling();
-
-
-        showDataStep(
-          data.order
-        );
-
-      }
-
-    } catch (error) {
-
-      console.warn(
-        'Payment status:',
-        error
-      );
-
     }
-
-  }
-
-
-
-  /* =========================
-     SHOW USER DATA STEP
-  ========================== */
-
-  function showDataStep(
-    order
-  ) {
-
-    currentOrder = {
-      ...currentOrder,
-
-      orderId:
-        order.id
-    };
-
-
-    document.getElementById(
-      'paymentStep'
-    ).style.display =
-      'none';
-
-
-    document.getElementById(
-      'userDataStep'
-    ).style.display =
-      'flex';
-
-
-    document.getElementById(
-      'telegramInput'
-    ).focus();
-
-  }
-
-
-
-  /* =========================
-     SUBMIT USER DATA
-  ========================== */
-
-  async function submitUserData(
-    event
-  ) {
-
-    event.preventDefault();
-
-
-    const telegramInput =
-      document.getElementById(
-        'telegramInput'
-      );
-
-
-    const nicknameInput =
-      document.getElementById(
-        'nicknameInput'
-      );
-
-
-    const telegram =
-      telegramInput.value.trim();
-
-
-    const nickname =
-      nicknameInput.value.trim();
-
-
-    telegramInput.classList.remove(
-      'input-error'
-    );
-
-
-    nicknameInput.classList.remove(
-      'input-error'
-    );
-
-
-    if (!telegram) {
-
-      telegramInput.classList.add(
-        'input-error'
-      );
-
-    }
-
-
-    if (!nickname) {
-
-      nicknameInput.classList.add(
-        'input-error'
-      );
-
-    }
-
-
-    if (
-      !telegram ||
-      !nickname
-    ) {
-      return;
-    }
-
-
-    const button =
-      event.currentTarget
-        .querySelector(
-          'button[type="submit"]'
-        );
-
-
-    button.disabled = true;
-
-
-    button.textContent =
-      '⏳ Сохраняем заказ...';
-
 
     try {
+        const { Pool } = require('pg');
 
-      const response =
-        await fetch(
-          '/api/orders',
-          {
-            method: 'POST',
+        db = new Pool({
+            connectionString: DATABASE_URL,
+            ssl: {
+                rejectUnauthorized: false
+            }
+        });
 
-            headers: {
-              'Content-Type':
-                'application/json'
-            },
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS orders (
+                id TEXT PRIMARY KEY,
+                product TEXT NOT NULL,
+                price TEXT NOT NULL,
+                telegram TEXT DEFAULT '',
+                nickname TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'waiting_payment',
+                payment_label TEXT,
+                operation_id TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                paid_at TIMESTAMPTZ
+            )
+        `);
 
-            body:
-              JSON.stringify({
-                orderId:
-                  currentOrder.orderId,
+        const migrations = [
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_label TEXT`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS operation_id TEXT`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`,
+            `ALTER TABLE orders ALTER COLUMN telegram DROP NOT NULL`,
+            `ALTER TABLE orders ALTER COLUMN nickname DROP NOT NULL`
+        ];
 
-                telegram,
+        for (const query of migrations) {
+            await db.query(query).catch(() => {});
+        }
 
-                nickname
-              })
-          }
-        );
-
-
-      const data =
-        await response.json();
-
-
-      if (
-        !response.ok ||
-        !data.success
-      ) {
-
-        throw new Error(
-          data.error ||
-          'Не удалось сохранить заказ.'
-        );
-
-      }
-
-
-      showSuccess(
-        data.order
-      );
-
+        console.log('Database: PostgreSQL');
     } catch (error) {
-
-      alert(
-        error.message ||
-        'Ошибка оформления заказа.'
-      );
-
-
-      button.disabled = false;
-
-
-      button.textContent =
-        '✅ Оформить заказ';
-
-    }
-
-  }
-
-
-
-  /* =========================
-     SUCCESS SCREEN
-  ========================== */
-
-  function showSuccess(
-    order
-  ) {
-
-    const modal =
-      document.getElementById(
-        'purchaseModal'
-      );
-
-
-    modal.innerHTML = `
-
-      <div class="success-overlay"></div>
-
-
-      <div class="success-window">
-
-
-        <div class="success-icon">
-          ✓
-        </div>
-
-
-        <div class="success-label">
-          MM2 SHOP
-        </div>
-
-
-        <h2>
-          Заказ принят!
-        </h2>
-
-
-        <p class="success-main">
-          Оплата подтверждена,
-          данные получены.
-        </p>
-
-
-        <div class="success-details">
-
-
-          <div>
-            <span>
-              Товар
-            </span>
-
-            <strong>
-              ${esc(order.product)}
-            </strong>
-          </div>
-
-
-          <div>
-            <span>
-              Цена
-            </span>
-
-            <strong>
-              ${esc(order.price)}
-            </strong>
-          </div>
-
-
-          <div>
-            <span>
-              Telegram
-            </span>
-
-            <strong>
-              ${esc(order.telegram)}
-            </strong>
-          </div>
-
-
-          <div>
-            <span>
-              Roblox
-            </span>
-
-            <strong>
-              ${esc(order.nickname)}
-            </strong>
-          </div>
-
-
-          <div>
-            <span>
-              Номер заказа
-            </span>
-
-            <strong>
-              ${esc(order.id)}
-            </strong>
-          </div>
-
-
-        </div>
-
-
-        <p class="saved-note">
-          Владелец магазина получил заказ
-          и свяжется с тобой.
-        </p>
-
-
-        <!-- TELEGRAM AFTER PAYMENT -->
-
-        <div class="success-telegram-note">
-
-          <strong>
-            ⭐ Отзывы можете посмотреть в ТГК
-          </strong>
-
-          Здесь публикуются свежие новости,
-          обновления магазина и отзывы покупателей.
-
-          <br>
-
-          <a
-            href="${TELEGRAM_CHANNEL}"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="success-telegram-link"
-          >
-            ✈ @mm2site →
-          </a>
-
-        </div>
-
-
-        <button
-          class="success-close"
-          type="button"
-        >
-          Закрыть
-        </button>
-
-
-      </div>
-
-    `;
-
-
-    modal.classList.add(
-      'active'
-    );
-
-
-    modal
-      .querySelector(
-        '.success-close'
-      )
-      .addEventListener(
-        'click',
-        closeModal
-      );
-
-  }
-
-
-
-  /* =========================
-     PAYMENT SUCCESS URL
-  ========================== */
-
-  function handleSuccessUrl() {
-
-    const params =
-      new URLSearchParams(
-        location.search
-      );
-
-
-    const orderId =
-      params.get(
-        'order'
-      );
-
-
-    if (
-      params.get(
-        'payment'
-      ) !== 'success' ||
-      !orderId
-    ) {
-      return;
-    }
-
-
-    ensureModal();
-
-
-    const modal =
-      document.getElementById(
-        'purchaseModal'
-      );
-
-
-    modal.classList.add(
-      'active'
-    );
-
-
-    document.body.classList.add(
-      'modal-open'
-    );
-
-
-    setPaymentStatus(
-      'waiting',
-      'Проверяем оплату',
-      'Подожди несколько секунд, пока ЮMoney отправит подтверждение.'
-    );
-
-
-    startPolling(
-      orderId
-    );
-
-  }
-
-
-
-  /* =========================
-     BUY BUTTONS
-  ========================== */
-
-  document.addEventListener(
-    'click',
-    (event) => {
-
-      const buy =
-        event.target.closest(
-          '.buy'
+        console.error(
+            'Database connection failed:',
+            error.message
         );
 
-
-      if (!buy) {
-        return;
-      }
-
-
-      event.preventDefault();
-
-
-      openModal(
-        buy.dataset.product,
-        buy.dataset.price
-      );
-
+        process.exit(1);
     }
-  );
+}
 
+/* =========================
+   LOCAL JSON
+========================= */
 
-
-  /* =========================
-     ESCAPE
-  ========================== */
-
-  document.addEventListener(
-    'keydown',
-    (event) => {
-
-      if (
-        event.key ===
-        'Escape'
-      ) {
-
-        closeModal();
-
-      }
-
-    }
-  );
-
-
-
-  /* =========================
-     PAGE LOAD
-  ========================== */
-
-  document.addEventListener(
-    'DOMContentLoaded',
-    () => {
-
-      handleSuccessUrl();
-
-
-      const observer =
-        new IntersectionObserver(
-          entries => {
-
-            entries.forEach(
-              entry => {
-
-                if (
-                  entry.isIntersecting
-                ) {
-
-                  entry.target.classList.add(
-                    'show'
-                  );
-
-                }
-
-              }
-            );
-
-          },
-          {
-            threshold:.08
-          }
-        );
-
-
-      document
-        .querySelectorAll(
-          `
-          .product,
-          .feature,
-          .section-title,
-          .contact-box,
-          .telegram-box
-          `
-        )
-        .forEach(
-          el =>
-            observer.observe(
-              el
+function readOrdersLocal() {
+    try {
+        const data = JSON.parse(
+            fs.readFileSync(
+                ORDERS_FILE,
+                'utf8'
             )
         );
 
+        return Array.isArray(data)
+            ? data
+            : [];
+    } catch {
+        return [];
     }
-  );
+}
 
-})();
+function writeOrdersLocal(orders) {
+    const temp =
+        ORDERS_FILE + '.tmp';
+
+    fs.writeFileSync(
+        temp,
+        JSON.stringify(
+            orders,
+            null,
+            2
+        ),
+        'utf8'
+    );
+
+    fs.renameSync(
+        temp,
+        ORDERS_FILE
+    );
+}
+
+/* =========================
+   HELPERS
+========================= */
+
+function createId() {
+    return (
+        'MM2-' +
+        Date.now()
+            .toString(36)
+            .toUpperCase() +
+        '-' +
+        crypto
+            .randomBytes(3)
+            .toString('hex')
+            .toUpperCase()
+    );
+}
+
+function normalizePrice(value) {
+    return Number(
+        String(value ?? '')
+            .replace(/[^\d.,]/g, '')
+            .replace(',', '.')
+    );
+}
+
+function formatOrder(row) {
+    if (!row) {
+        return null;
+    }
+
+    return {
+        id: row.id,
+        product: row.product,
+        price: row.price,
+        telegram: row.telegram || '',
+        nickname: row.nickname || '',
+        status:
+            row.status ||
+            'completed',
+        payment_label:
+            row.payment_label || '',
+        operation_id:
+            row.operation_id || '',
+        date: row.created_at
+            ? new Date(
+                row.created_at
+            ).toLocaleString('ru-RU')
+            : (
+                row.date || ''
+            ),
+        paid_at: row.paid_at
+            ? new Date(
+                row.paid_at
+            ).toLocaleString('ru-RU')
+            : ''
+    };
+}
+
+/* =========================
+   CREATE ORDER
+========================= */
+
+async function createPendingOrder(
+    product,
+    price
+) {
+    const orderId = createId();
+
+    const label =
+        'MM2_' +
+        orderId.replace(
+            /[^A-Za-z0-9_-]/g,
+            ''
+        );
+
+    if (db) {
+        const result =
+            await db.query(
+                `
+                INSERT INTO orders
+                (
+                    id,
+                    product,
+                    price,
+                    telegram,
+                    nickname,
+                    status,
+                    payment_label
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    '',
+                    '',
+                    $4,
+                    $5
+                )
+                RETURNING *
+                `,
+                [
+                    orderId,
+                    product,
+                    price + ' ₽',
+                    'waiting_payment',
+                    label
+                ]
+            );
+
+        return formatOrder(
+            result.rows[0]
+        );
+    }
+
+    const order = {
+        id: orderId,
+        product: product,
+        price: price + ' ₽',
+        telegram: '',
+        nickname: '',
+        status: 'waiting_payment',
+        payment_label: label,
+        operation_id: '',
+        date:
+            new Date()
+                .toLocaleString('ru-RU'),
+        paid_at: ''
+    };
+
+    const orders =
+        readOrdersLocal();
+
+    orders.push(order);
+
+    writeOrdersLocal(orders);
+
+    return order;
+}
+
+/* =========================
+   GET ORDER
+========================= */
+
+async function getOrder(id) {
+    if (db) {
+        const result =
+            await db.query(
+                `
+                SELECT *
+                FROM orders
+                WHERE id = $1
+                `,
+                [id]
+            );
+
+        return formatOrder(
+            result.rows[0]
+        );
+    }
+
+    return readOrdersLocal()
+        .find(
+            order =>
+                order.id === id
+        ) || null;
+}
+
+/* =========================
+   GET ORDER BY LABEL
+========================= */
+
+async function getOrderByLabel(label) {
+    if (db) {
+        const result =
+            await db.query(
+                `
+                SELECT *
+                FROM orders
+                WHERE payment_label = $1
+                LIMIT 1
+                `,
+                [label]
+            );
+
+        return formatOrder(
+            result.rows[0]
+        );
+    }
+
+    return readOrdersLocal()
+        .find(
+            order =>
+                order.payment_label === label
+        ) || null;
+}
+
+/* =========================
+   MARK PAYMENT PAID
+========================= */
+
+async function markPaid(
+    label,
+    operationId
+) {
+    if (db) {
+        const result =
+            await db.query(
+                `
+                UPDATE orders
+                SET
+                    status = 'paid',
+                    operation_id = $1,
+                    paid_at = NOW()
+                WHERE payment_label = $2
+                  AND status = 'waiting_payment'
+                RETURNING *
+                `,
+                [
+                    operationId,
+                    label
+                ]
+            );
+
+        return result.rows[0]
+            ? formatOrder(
+                result.rows[0]
+            )
+            : null;
+    }
+
+    const orders =
+        readOrdersLocal();
+
+    const order =
+        orders.find(
+            item =>
+                item.payment_label === label &&
+                item.status === 'waiting_payment'
+        );
+
+    if (!order) {
+        return null;
+    }
+
+    order.status = 'paid';
+
+    order.operation_id =
+        operationId;
+
+    order.paid_at =
+        new Date()
+            .toLocaleString('ru-RU');
+
+    writeOrdersLocal(
+        orders
+    );
+
+    return order;
+}
+
+/* =========================
+   SAVE USER DATA
+========================= */
+
+async function saveUserData(
+    id,
+    telegram,
+    nickname
+) {
+    if (db) {
+        const result =
+            await db.query(
+                `
+                UPDATE orders
+                SET
+                    telegram = $1,
+                    nickname = $2,
+                    status = 'completed'
+                WHERE id = $3
+                  AND status = 'paid'
+                RETURNING *
+                `,
+                [
+                    telegram,
+                    nickname,
+                    id
+                ]
+            );
+
+        return result.rows[0]
+            ? formatOrder(
+                result.rows[0]
+            )
+            : null;
+    }
+
+    const orders =
+        readOrdersLocal();
+
+    const order =
+        orders.find(
+            item =>
+                item.id === id &&
+                item.status === 'paid'
+        );
+
+    if (!order) {
+        return null;
+    }
+
+    order.telegram =
+        telegram;
+
+    order.nickname =
+        nickname;
+
+    order.status =
+        'completed';
+
+    writeOrdersLocal(
+        orders
+    );
+
+    return order;
+}
+
+/* =========================
+   ADMIN ORDERS
+========================= */
+
+async function getOrders() {
+    if (db) {
+        const result =
+            await db.query(
+                `
+                SELECT *
+                FROM orders
+                ORDER BY created_at DESC
+                `
+            );
+
+        return result.rows.map(
+            formatOrder
+        );
+    }
+
+    return readOrdersLocal()
+        .slice()
+        .reverse()
+        .map(
+            formatOrder
+        );
+}
+
+async function deleteOrder(id) {
+    if (db) {
+        await db.query(
+            `
+            DELETE FROM orders
+            WHERE id = $1
+            `,
+            [id]
+        );
+
+        return;
+    }
+
+    const orders =
+        readOrdersLocal()
+            .filter(
+                order =>
+                    order.id !== id
+            );
+
+    writeOrdersLocal(
+        orders
+    );
+}
+
+/* =========================
+   HTTP HELPERS
+========================= */
+
+function json(
+    res,
+    status,
+    data,
+    extraHeaders = {}
+) {
+    const text =
+        JSON.stringify(data);
+
+    res.writeHead(
+        status,
+        {
+            'Content-Type':
+                'application/json; charset=utf-8',
+
+            'Cache-Control':
+                'no-store',
+
+            'Content-Length':
+                Buffer.byteLength(text),
+
+            ...extraHeaders
+        }
+    );
+
+    res.end(text);
+}
+
+function readBody(
+    req,
+    limit = 50000
+) {
+    return new Promise(
+        (resolve, reject) => {
+            let body = '';
+
+            req.on(
+                'data',
+                chunk => {
+                    body += chunk;
+
+                    if (
+                        body.length >
+                        limit
+                    ) {
+                        reject(
+                            new Error(
+                                'payload too large'
+                            )
+                        );
+
+                        req.destroy();
+                    }
+                }
+            );
+
+            req.on(
+                'end',
+                () => resolve(body)
+            );
+
+            req.on(
+                'error',
+                reject
+            );
+        }
+    );
+}
+
+/* =========================
+   COOKIES
+========================= */
+
+function parseCookies(req) {
+    const result = {};
+
+    const
