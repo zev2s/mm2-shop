@@ -72,7 +72,7 @@
 
     modal.querySelector('.close-purchase').addEventListener('click', closeModal);
     modal.querySelector('.purchase-overlay').addEventListener('click', closeModal);
-    modal.querySelector('#payButton').addEventListener('click', openPayment);
+    modal.querySelector('#payButton').addEventListener('click', beginPayment);
     modal.querySelector('#userDataStep').addEventListener('submit', submitUserData);
   }
 
@@ -100,8 +100,6 @@
 
     modal.classList.add('active');
     document.body.classList.add('modal-open');
-
-    createPayment(product, price);
   }
 
   function closeModal() {
@@ -118,8 +116,16 @@
     box.innerHTML = `<span class="payment-dot"></span><div><b>${esc(title)}</b><small>${esc(text)}</small></div>`;
   }
 
-  async function createPayment(product, price) {
+  async function beginPayment() {
     const button = document.getElementById('payButton');
+    if (currentOrder?.orderId) {
+      openPayment();
+      return;
+    }
+
+    const product = document.getElementById('purchaseTitle').textContent.trim();
+    const price = document.getElementById('purchasePrice').textContent.trim();
+
     button.disabled = true;
     button.textContent = '⏳ Создаём платёж...';
 
@@ -136,15 +142,14 @@
       }
 
       currentOrder = data;
-      button.disabled = false;
-      button.textContent = '💳 Оплатить через ЮMoney';
-      setPaymentStatus('waiting', 'Ожидаем оплату', `Сумма: ${data.sum} ₽. Нажми кнопку оплаты.`);
+      setPaymentStatus('waiting', 'Платёж открыт', `Сумма: ${data.sum} ₽. Оплати в окне ЮMoney.`);
       startPolling(data.orderId);
+      openPayment();
     } catch (error) {
       console.error(error);
       setPaymentStatus('error', 'Ошибка', error.message || 'Не удалось создать платёж.');
-      button.disabled = true;
-      button.textContent = 'Не удалось создать платёж';
+      button.disabled = false;
+      button.textContent = '💳 Попробовать снова';
     }
   }
 
