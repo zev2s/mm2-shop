@@ -1,155 +1,93 @@
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-const { URL } = require("url");
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { URL } = require('url');
 
 const PORT = Number(process.env.PORT || 3000);
-
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
-const DATABASE_URL = process.env.DATABASE_URL || "";
-
-const YOOMONEY_RECEIVER =
-    process.env.YOOMONEY_RECEIVER || "";
-
-const YOOMONEY_NOTIFICATION_SECRET =
-    process.env.YOOMONEY_NOTIFICATION_SECRET || "";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const YOOMONEY_RECEIVER = process.env.YOOMONEY_RECEIVER || '';
+const YOOMONEY_NOTIFICATION_SECRET = process.env.YOOMONEY_NOTIFICATION_SECRET || '';
 
 const ROOT = __dirname;
-
-const DATA_DIR = path.join(ROOT, "data");
-const ORDERS_FILE = path.join(DATA_DIR, "orders.json");
-
-
-// ======================================================
-// ПРОВЕРКА
-// ======================================================
+const DATA_DIR = path.join(ROOT, 'data');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 
 if (!ADMIN_PASSWORD) {
-    console.error(
-        "ERROR: ADMIN_PASSWORD is not set."
-    );
-
+    console.error('ERROR: ADMIN_PASSWORD is not set.');
     process.exit(1);
 }
 
 if (!YOOMONEY_RECEIVER) {
-    console.warn(
-        "WARNING: YOOMONEY_RECEIVER is not set."
-    );
+    console.error('ERROR: YOOMONEY_RECEIVER is not set.');
+    process.exit(1);
 }
 
 if (!YOOMONEY_NOTIFICATION_SECRET) {
-    console.warn(
-        "WARNING: YOOMONEY_NOTIFICATION_SECRET is not set."
-    );
+    console.error('ERROR: YOOMONEY_NOTIFICATION_SECRET is not set.');
+    process.exit(1);
 }
 
-
-// ======================================================
-// LOCAL STORAGE
-// ======================================================
-
-fs.mkdirSync(DATA_DIR, {
-    recursive: true
-});
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
 if (!fs.existsSync(ORDERS_FILE)) {
-
-    fs.writeFileSync(
-        ORDERS_FILE,
-        "[]",
-        "utf8"
-    );
-
+    fs.writeFileSync(ORDERS_FILE, '[]', 'utf8');
 }
 
-
-// ======================================================
-// SESSIONS
-// ======================================================
-
 const sessions = new Map();
-
-
-// ======================================================
-// DATABASE
-// ======================================================
-
 let db = null;
 
+/* =========================
+   ТОВАРЫ
+========================= */
+
+const PRODUCTS = {
+    'BioBlade': 39,
+    'Raygun': 399,
+    "Traveler's Gun": 8999,
+    'Harvester': 299
+};
+
+/* =========================
+   DATABASE
+========================= */
 
 async function initDb() {
-
     if (!DATABASE_URL) {
-
-        console.log(
-            "Database: local JSON"
-        );
-
+        console.log('Database: local JSON');
         return;
-
     }
 
-
     try {
-
-        const { Pool } =
-            require("pg");
-
+        const { Pool } = require('pg');
 
         db = new Pool({
-
-            connectionString:
-                DATABASE_URL,
-
-            ssl:
-                process.env.NODE_ENV === "production"
-                    ? {
-                        rejectUnauthorized: false
-                    }
-                    : false
-
+            connectionString: DATABASE_URL,
+            ssl: {
+                rejectUnauthorized: false
+            }
         });
 
-
         await db.query(`
-
             CREATE TABLE IF NOT EXISTS orders (
-
                 id TEXT PRIMARY KEY,
-
                 product TEXT NOT NULL,
-
                 price TEXT NOT NULL,
-
-                telegram TEXT,
-
-                nickname TEXT,
-
+                telegram TEXT NOT NULL DEFAULT '',
+                nickname TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'waiting_payment',
-
                 payment_label TEXT,
-
-                payment_operation_id TEXT,
-
-                payment_amount TEXT,
-
+                operation_id TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
                 paid_at TIMESTAMPTZ
-
             )
-
         `);
 
-
-        // Для старой базы добавляем новые поля
-
+        // Миграция старой таблицы
         await db.query(`
             ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS status TEXT
-            DEFAULT 'waiting_payment'
+            ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'
         `);
 
         await db.query(`
@@ -159,12 +97,7 @@ async function initDb() {
 
         await db.query(`
             ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS payment_operation_id TEXT
-        `);
-
-        await db.query(`
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS payment_amount TEXT
+            ADD COLUMN IF NOT EXISTS operation_id TEXT
         `);
 
         await db.query(`
@@ -172,2753 +105,1333 @@ async function initDb() {
             ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ
         `);
 
+        await db.query(`
+            ALTER TABLE orders
+            ALTER COLUMN telegram DROP NOT NULL
+        `).catch(() => {});
 
-        console.log(
-            "Database: PostgreSQL"
-        );
+        await db.query(`
+            ALTER TABLE orders
+            ALTER COLUMN nickname DROP NOT NULL
+        `).catch(() => {});
 
-
+        console.log('Database: PostgreSQL');
     } catch (error) {
-
-        console.error(
-            "Database connection failed:",
-            error.message
-        );
-
+        console.error('Database connection failed:', error.message);
         process.exit(1);
-
     }
-
 }
 
-
-// ======================================================
-// LOCAL JSON
-// ======================================================
+/* =========================
+   LOCAL JSON
+========================= */
 
 function readOrdersLocal() {
-
     try {
+        const data = JSON.parse(
+            fs.readFileSync(ORDERS_FILE, 'utf8')
+        );
 
-        const data =
-            JSON.parse(
-                fs.readFileSync(
-                    ORDERS_FILE,
-                    "utf8"
-                )
-            );
-
-
-        return Array.isArray(data)
-            ? data
-            : [];
-
-
+        return Array.isArray(data) ? data : [];
     } catch {
-
         return [];
-
     }
-
 }
 
-
-function writeOrdersLocal(
-    orders
-) {
-
-    const tmp =
-        ORDERS_FILE + ".tmp";
-
+function writeOrdersLocal(orders) {
+    const temp = ORDERS_FILE + '.tmp';
 
     fs.writeFileSync(
-        tmp,
-        JSON.stringify(
-            orders,
-            null,
-            2
-        ),
-        "utf8"
+        temp,
+        JSON.stringify(orders, null, 2),
+        'utf8'
     );
 
-
-    fs.renameSync(
-        tmp,
-        ORDERS_FILE
-    );
-
+    fs.renameSync(temp, ORDERS_FILE);
 }
 
-
-// ======================================================
-// ID
-// ======================================================
+/* =========================
+   HELPERS
+========================= */
 
 function createId() {
-
-    return (
-        "MM2-" +
-        Date.now()
-            .toString(36)
-            .toUpperCase() +
-        "-" +
-        crypto
-            .randomBytes(3)
-            .toString("hex")
-            .toUpperCase()
-    );
-
+    return 'MM2-' +
+        Date.now().toString(36).toUpperCase() +
+        '-' +
+        crypto.randomBytes(3).toString('hex').toUpperCase();
 }
 
+function normalizePrice(value) {
+    return Number(
+        String(value)
+            .replace(/[^\d.,]/g, '')
+            .replace(',', '.')
+    );
+}
 
-// ======================================================
-// CREATE PENDING ORDER
-// ======================================================
+function formatOrder(row) {
+    if (!row) return null;
 
-async function createPendingOrder(
-    product,
-    price
-) {
+    return {
+        id: row.id,
+        product: row.product,
+        price: row.price,
+        telegram: row.telegram || '',
+        nickname: row.nickname || '',
+        status: row.status || 'completed',
+        payment_label: row.payment_label || '',
+        operation_id: row.operation_id || '',
+        date: row.created_at
+            ? new Date(row.created_at).toLocaleString('ru-RU')
+            : (row.date || ''),
+        paid_at: row.paid_at
+            ? new Date(row.paid_at).toLocaleString('ru-RU')
+            : ''
+    };
+}
 
-    const id =
-        createId();
+/* =========================
+   CREATE PAYMENT ORDER
+========================= */
 
-
-    const paymentLabel =
-        id;
-
+async function createPendingOrder(product, price) {
+    const id = createId();
+    const label = 'MM2_' + id.replace(/[^A-Za-z0-9_-]/g, '');
 
     if (db) {
-
-        const result =
-            await db.query(
-                `
-                INSERT INTO orders
-                (
-                    id,
-                    product,
-                    price,
-                    telegram,
-                    nickname,
-                    status,
-                    payment_label
-                )
-                VALUES
-                (
-                    $1,
-                    $2,
-                    $3,
-                    NULL,
-                    NULL,
-                    'waiting_payment',
-                    $4
-                )
-                RETURNING *
-                `,
-                [
-                    id,
-                    product,
-                    price,
-                    paymentLabel
-                ]
-            );
-
-
-        return normalizeOrder(
-            result.rows[0]
+        const result = await db.query(
+            `
+            INSERT INTO orders
+            (
+                id,
+                product,
+                price,
+                telegram,
+                nickname,
+                status,
+                payment_label
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING *
+            `,
+            [
+                id,
+                product,
+                String(price) + ' ₽',
+                '',
+                '',
+                'waiting_payment',
+                label
+            ]
         );
 
+        return formatOrder(result.rows[0]);
     }
 
-
-    const orders =
-        readOrdersLocal();
-
+    const orders = readOrdersLocal();
 
     const order = {
-
         id,
-
         product,
-
-        price,
-
-        telegram: "",
-
-        nickname: "",
-
-        status:
-            "waiting_payment",
-
-        payment_label:
-            paymentLabel,
-
-        payment_operation_id:
-            "",
-
-        payment_amount:
-            "",
-
-        date:
-            new Date()
-                .toLocaleString(
-                    "ru-RU"
-                )
-
+        price: String(price) + ' ₽',
+        telegram: '',
+        nickname: '',
+        status: 'waiting_payment',
+        payment_label: label,
+        operation_id: '',
+        date: new Date().toLocaleString('ru-RU'),
+        paid_at: ''
     };
 
-
     orders.push(order);
-
-    writeOrdersLocal(
-        orders
-    );
-
+    writeOrdersLocal(orders);
 
     return order;
-
 }
 
+/* =========================
+   GET ORDER
+========================= */
 
-// ======================================================
-// GET ORDER
-// ======================================================
-
-async function getOrder(
-    id
-) {
-
+async function getOrder(id) {
     if (db) {
-
-        const result =
-            await db.query(
-                `
-                SELECT *
-                FROM orders
-                WHERE id = $1
-                LIMIT 1
-                `,
-                [id]
-            );
-
-
-        if (!result.rows.length) {
-            return null;
-        }
-
-
-        return normalizeOrder(
-            result.rows[0]
+        const result = await db.query(
+            `SELECT * FROM orders WHERE id = $1`,
+            [id]
         );
 
+        return formatOrder(result.rows[0]);
     }
 
+    return readOrdersLocal().find(
+        order => order.id === id
+    ) || null;
+}
 
-    const orders =
-        readOrdersLocal();
+/* =========================
+   MARK PAYMENT
+========================= */
 
+async function markPaid(label, operationId) {
+    if (db) {
+        const result = await db.query(
+            `
+            UPDATE orders
+            SET
+                status = 'paid',
+                operation_id = $1,
+                paid_at = NOW()
+            WHERE payment_label = $2
+              AND status = 'waiting_payment'
+            RETURNING *
+            `,
+            [operationId, label]
+        );
 
-    return (
-        orders.find(
-            order =>
-                order.id === id
-        ) || null
+        return result.rows[0]
+            ? formatOrder(result.rows[0])
+            : null;
+    }
+
+    const orders = readOrdersLocal();
+
+    const order = orders.find(
+        item =>
+            item.payment_label === label &&
+            item.status === 'waiting_payment'
     );
 
+    if (!order) return null;
+
+    order.status = 'paid';
+    order.operation_id = operationId;
+    order.paid_at = new Date().toLocaleString('ru-RU');
+
+    writeOrdersLocal(orders);
+
+    return order;
 }
 
+/* =========================
+   SAVE USER DATA
+========================= */
 
-// ======================================================
-// SAVE CUSTOMER DATA
-// ======================================================
-
-async function saveCustomerData(
-    id,
-    telegram,
-    nickname
-) {
-
+async function saveUserData(id, telegram, nickname) {
     if (db) {
-
-        const result =
-            await db.query(
-                `
-                UPDATE orders
-
-                SET
-                    telegram = $1,
-                    nickname = $2
-
-                WHERE id = $3
-
-                RETURNING *
-                `,
-                [
-                    telegram,
-                    nickname,
-                    id
-                ]
-            );
-
-
-        if (!result.rows.length) {
-            return null;
-        }
-
-
-        return normalizeOrder(
-            result.rows[0]
+        const result = await db.query(
+            `
+            UPDATE orders
+            SET
+                telegram = $1,
+                nickname = $2,
+                status = 'completed'
+            WHERE id = $3
+              AND status = 'paid'
+            RETURNING *
+            `,
+            [telegram, nickname, id]
         );
 
+        return result.rows[0]
+            ? formatOrder(result.rows[0])
+            : null;
     }
 
+    const orders = readOrdersLocal();
 
-    const orders =
-        readOrdersLocal();
-
-
-    const index =
-        orders.findIndex(
-            order =>
-                order.id === id
-        );
-
-
-    if (index === -1) {
-        return null;
-    }
-
-
-    orders[index].telegram =
-        telegram;
-
-    orders[index].nickname =
-        nickname;
-
-
-    writeOrdersLocal(
-        orders
+    const order = orders.find(
+        item =>
+            item.id === id &&
+            item.status === 'paid'
     );
 
+    if (!order) return null;
 
-    return orders[index];
+    order.telegram = telegram;
+    order.nickname = nickname;
+    order.status = 'completed';
 
+    writeOrdersLocal(orders);
+
+    return order;
 }
 
-
-// ======================================================
-// MARK ORDER PAID
-// ======================================================
-
-async function markOrderPaid(
-    label,
-    operationId,
-    amount
-) {
-
-    if (db) {
-
-        const result =
-            await db.query(
-                `
-                UPDATE orders
-
-                SET
-                    status = 'paid_waiting_data',
-                    payment_operation_id = $1,
-                    payment_amount = $2,
-                    paid_at = NOW()
-
-                WHERE
-                    payment_label = $3
-                    AND status = 'waiting_payment'
-
-                RETURNING *
-                `,
-                [
-                    operationId,
-                    amount,
-                    label
-                ]
-            );
-
-
-        if (!result.rows.length) {
-            return null;
-        }
-
-
-        return normalizeOrder(
-            result.rows[0]
-        );
-
-    }
-
-
-    const orders =
-        readOrdersLocal();
-
-
-    const index =
-        orders.findIndex(
-            order =>
-                order.payment_label === label &&
-                order.status ===
-                    "waiting_payment"
-        );
-
-
-    if (index === -1) {
-        return null;
-    }
-
-
-    orders[index].status =
-        "paid_waiting_data";
-
-    orders[index].payment_operation_id =
-        operationId;
-
-    orders[index].payment_amount =
-        amount;
-
-    orders[index].paid_at =
-        new Date().toISOString();
-
-
-    writeOrdersLocal(
-        orders
-    );
-
-
-    return orders[index];
-
-}
-
-
-// ======================================================
-// FINAL STATUS AFTER DATA
-// ======================================================
-
-async function markOrderCompleted(
-    id
-) {
-
-    if (db) {
-
-        const result =
-            await db.query(
-                `
-                UPDATE orders
-
-                SET status = 'completed'
-
-                WHERE
-                    id = $1
-                    AND telegram IS NOT NULL
-                    AND telegram <> ''
-                    AND nickname IS NOT NULL
-                    AND nickname <> ''
-
-                RETURNING *
-                `,
-                [id]
-            );
-
-
-        if (!result.rows.length) {
-            return null;
-        }
-
-
-        return normalizeOrder(
-            result.rows[0]
-        );
-
-    }
-
-
-    const orders =
-        readOrdersLocal();
-
-
-    const index =
-        orders.findIndex(
-            order =>
-                order.id === id
-        );
-
-
-    if (index === -1) {
-        return null;
-    }
-
-
-    orders[index].status =
-        "completed";
-
-
-    writeOrdersLocal(
-        orders
-    );
-
-
-    return orders[index];
-
-}
-
-
-// ======================================================
-// ALL ORDERS
-// ======================================================
+/* =========================
+   ADMIN
+========================= */
 
 async function getOrders() {
-
     if (db) {
-
-        const result =
-            await db.query(
-                `
-                SELECT *
-                FROM orders
-                ORDER BY created_at DESC
-                `
-            );
-
-
-        return result.rows.map(
-            normalizeOrder
+        const result = await db.query(
+            `
+            SELECT *
+            FROM orders
+            ORDER BY created_at DESC
+            `
         );
 
+        return result.rows.map(formatOrder);
     }
-
 
     return readOrdersLocal()
         .slice()
-        .reverse();
-
+        .reverse()
+        .map(formatOrder);
 }
 
-
-// ======================================================
-// DELETE
-// ======================================================
-
-async function deleteOrder(
-    id
-) {
-
+async function deleteOrder(id) {
     if (db) {
-
         await db.query(
-            `
-            DELETE FROM orders
-            WHERE id = $1
-            `,
+            `DELETE FROM orders WHERE id = $1`,
             [id]
         );
 
         return;
-
     }
 
+    const orders = readOrdersLocal()
+        .filter(order => order.id !== id);
 
-    const orders =
-        readOrdersLocal()
-            .filter(
-                order =>
-                    order.id !== id
-            );
-
-
-    writeOrdersLocal(
-        orders
-    );
-
+    writeOrdersLocal(orders);
 }
 
-
-// ======================================================
-// NORMALIZE
-// ======================================================
-
-function normalizeOrder(
-    order
-) {
-
-    return {
-
-        id:
-            order.id,
-
-        product:
-            order.product,
-
-        price:
-            order.price,
-
-        telegram:
-            order.telegram || "",
-
-        nickname:
-            order.nickname || "",
-
-        status:
-            order.status ||
-            "waiting_payment",
-
-        payment_label:
-            order.payment_label ||
-            "",
-
-        payment_operation_id:
-            order.payment_operation_id ||
-            "",
-
-        payment_amount:
-            order.payment_amount ||
-            "",
-
-        date:
-            order.created_at
-                ? new Date(
-                    order.created_at
-                ).toLocaleString(
-                    "ru-RU"
-                )
-                : (
-                    order.date || ""
-                ),
-
-        paid_at:
-            order.paid_at
-                ? new Date(
-                    order.paid_at
-                ).toLocaleString(
-                    "ru-RU"
-                )
-                : ""
-
-    };
-
-}
-
-
-// ======================================================
-// MONEY
-// ======================================================
-
-function moneyToNumber(
-    value
-) {
-
-    const number =
-        Number(
-            String(value)
-                .replace(",", ".")
-                .replace(/[^\d.]/g, "")
-        );
-
-
-    if (!Number.isFinite(number)) {
-        return null;
-    }
-
-
-    return number;
-
-}
-
-
-// ======================================================
-// YOOMONEY SIGN
-// ======================================================
-
-function rfc3986Encode(
-    value
-) {
-
-    return encodeURIComponent(
-        String(value ?? "")
-    )
-        .replace(/[!'()*]/g,
-            char =>
-                "%" +
-                char
-                    .charCodeAt(0)
-                    .toString(16)
-                    .toUpperCase()
-        );
-
-}
-
-
-function verifyYuMoneySignature(
-    params
-) {
-
-    if (!YOOMONEY_NOTIFICATION_SECRET) {
-        return false;
-    }
-
-
-    const sign =
-        String(
-            params.sign || ""
-        );
-
-
-    if (!sign) {
-        return false;
-    }
-
-
-    const keys =
-        Object.keys(params)
-            .filter(
-                key =>
-                    key !== "sign"
-            )
-            .sort();
-
-
-    const source =
-        keys
-            .map(
-                key =>
-                    `${rfc3986Encode(key)}=${rfc3986Encode(params[key])}`
-            )
-            .join("&");
-
-
-    const expected =
-        crypto
-            .createHmac(
-                "sha256",
-                YOOMONEY_NOTIFICATION_SECRET
-            )
-            .update(
-                source,
-                "utf8"
-            )
-            .digest("hex");
-
-
-    try {
-
-        return crypto.timingSafeEqual(
-            Buffer.from(
-                expected,
-                "utf8"
-            ),
-            Buffer.from(
-                sign.toLowerCase(),
-                "utf8"
-            )
-        );
-
-    } catch {
-
-        return false;
-
-    }
-
-}
-
-
-// ======================================================
-// BODY
-// ======================================================
-
-function readBody(
-    req,
-    limit = 30000
-) {
-
-    return new Promise(
-        (resolve, reject) => {
-
-            let body = "";
-
-
-            req.on(
-                "data",
-                chunk => {
-
-                    body += chunk;
-
-
-                    if (
-                        body.length >
-                        limit
-                    ) {
-
-                        reject(
-                            new Error(
-                                "payload"
-                            )
-                        );
-
-                        req.destroy();
-
-                    }
-
-                }
-            );
-
-
-            req.on(
-                "end",
-                () => resolve(body)
-            );
-
-
-            req.on(
-                "error",
-                reject
-            );
-
-        }
-    );
-
-}
-
-
-// ======================================================
-// JSON RESPONSE
-// ======================================================
-
-function json(
-    res,
-    status,
-    body
-) {
-
-    const text =
-        JSON.stringify(body);
-
-
-    res.writeHead(
-        status,
-        {
-            "Content-Type":
-                "application/json; charset=utf-8",
-
-            "Cache-Control":
-                "no-store",
-
-            "Content-Length":
-                Buffer.byteLength(
-                    text
-                )
-        }
-    );
-
+/* =========================
+   HTTP HELPERS
+========================= */
+
+function json(res, status, data) {
+    const text = JSON.stringify(data);
+
+    res.writeHead(status, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Content-Length': Buffer.byteLength(text)
+    });
 
     res.end(text);
-
 }
 
+function readBody(req, limit = 20000) {
+    return new Promise((resolve, reject) => {
+        let body = '';
 
-// ======================================================
-// COOKIES
-// ======================================================
+        req.on('data', chunk => {
+            body += chunk;
 
-function parseCookies(
-    req
-) {
+            if (body.length > limit) {
+                reject(new Error('payload'));
+                req.destroy();
+            }
+        });
 
+        req.on('end', () => resolve(body));
+        req.on('error', reject);
+    });
+}
+
+function parseCookies(req) {
     const result = {};
 
+    const cookies = String(
+        req.headers.cookie || ''
+    ).split(';');
 
-    for (
-        const part of
-        (
-            req.headers.cookie ||
-            ""
-        ).split(";")
-    ) {
+    for (const cookie of cookies) {
+        const index = cookie.indexOf('=');
 
-        const index =
-            part.indexOf("=");
+        if (index === -1) continue;
 
+        const key = cookie
+            .slice(0, index)
+            .trim();
 
-        if (index === -1) {
-            continue;
-        }
+        const value = cookie
+            .slice(index + 1)
+            .trim();
 
-
-        const key =
-            part
-                .slice(0, index)
-                .trim();
-
-
-        const value =
-            part
-                .slice(index + 1)
-                .trim();
-
-
-        result[key] =
-            decodeURIComponent(
-                value
-            );
-
+        result[key] = decodeURIComponent(value);
     }
-
 
     return result;
-
 }
 
+function isAdmin(req) {
+    const token = parseCookies(req).admin_session;
 
-function isAdmin(
-    req
-) {
-
-    const token =
-        parseCookies(req)
-            .admin_session;
-
-
-    return (
-        !!token &&
-        sessions.has(token)
-    );
-
+    return !!token && sessions.has(token);
 }
 
+/* =========================
+   STATIC FILES
+========================= */
 
-// ======================================================
-// FILES
-// ======================================================
-
-function safePath(
-    requestPath
-) {
-
+function safePath(requestPath) {
     let clean;
 
-
     try {
-
-        clean =
-            decodeURIComponent(
-                String(
-                    requestPath || "/"
-                ).split("?")[0]
-            );
-
+        clean = decodeURIComponent(
+            String(requestPath || '/')
+                .split('?')[0]
+        );
     } catch {
-
         return null;
-
     }
 
-
     const relative =
-        (
-            clean === "/" ||
-            clean === ""
-        )
-            ? "index.html"
-            : clean.replace(
-                /^[/\\]+/,
-                ""
-            );
+        clean === '/' || clean === ''
+            ? 'index.html'
+            : clean.replace(/^[/\\]+/, '');
 
-
-    const root =
-        path.resolve(
-            ROOT
-        );
-
-
-    const full =
-        path.resolve(
-            root,
-            relative
-        );
-
+    const root = path.resolve(ROOT);
+    const full = path.resolve(root, relative);
 
     if (
         full !== root &&
-        !full.startsWith(
-            root + path.sep
-        )
+        !full.startsWith(root + path.sep)
     ) {
-
         return null;
-
     }
 
-
     return full;
-
 }
 
+function mime(file) {
+    const ext = path.extname(file).toLowerCase();
 
-function mime(
-    file
-) {
+    const types = {
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'application/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
+        '.ico': 'image/x-icon'
+    };
 
-    const ext =
-        path.extname(
-            file
-        ).toLowerCase();
-
-
-    return {
-
-        ".html":
-            "text/html; charset=utf-8",
-
-        ".js":
-            "application/javascript; charset=utf-8",
-
-        ".css":
-            "text/css; charset=utf-8",
-
-        ".png":
-            "image/png",
-
-        ".jpg":
-            "image/jpeg",
-
-        ".jpeg":
-            "image/jpeg",
-
-        ".webp":
-            "image/webp",
-
-        ".svg":
-            "image/svg+xml",
-
-        ".ico":
-            "image/x-icon"
-
-    }[ext] ||
-        "application/octet-stream";
-
+    return types[ext] || 'application/octet-stream';
 }
 
-
-function serveFile(
-    res,
-    file
-) {
-
-    fs.readFile(
-        file,
-        (error, data) => {
-
-            if (error) {
-
-                return json(
-                    res,
-                    404,
-                    {
-                        error:
-                            "Не найдено"
-                    }
-                );
-
-            }
-
-
-            res.writeHead(
-                200,
-                {
-                    "Content-Type":
-                        mime(file),
-
-                    "Cache-Control":
-                        "no-cache"
-                }
-            );
-
-
-            res.end(data);
-
+function serveFile(res, file) {
+    fs.readFile(file, (error, data) => {
+        if (error) {
+            return json(res, 404, {
+                error: 'Не найдено'
+            });
         }
-    );
 
+        res.writeHead(200, {
+            'Content-Type': mime(file),
+            'Cache-Control': 'no-cache'
+        });
+
+        res.end(data);
+    });
 }
 
+/* =========================
+   YOOMONEY SIGNATURE
+========================= */
 
-// ======================================================
-// ADMIN
-// ======================================================
+function encodeRFC3986(value) {
+    return encodeURIComponent(String(value ?? ''))
+        .replace(/[!'()*]/g, char =>
+            '%' +
+            char.charCodeAt(0)
+                .toString(16)
+                .toUpperCase()
+        );
+}
 
-function adminPage(
-    res
-) {
+function verifyYooMoneySignature(params) {
+    const receivedSign = String(
+        params.sign || ''
+    ).toLowerCase();
 
-    const html = `
+    if (!receivedSign) return false;
 
-<!doctype html>
+    const values = Object.keys(params)
+        .filter(key => key !== 'sign')
+        .sort()
+        .map(key =>
+            key + '=' + encodeRFC3986(params[key])
+        )
+        .join('&');
 
+    const expectedSign = crypto
+        .createHmac(
+            'sha256',
+            YOOMONEY_NOTIFICATION_SECRET
+        )
+        .update(values, 'utf8')
+        .digest('hex')
+        .toLowerCase();
+
+    if (receivedSign.length !== expectedSign.length) {
+        return false;
+    }
+
+    return crypto.timingSafeEqual(
+        Buffer.from(receivedSign),
+        Buffer.from(expectedSign)
+    );
+}
+
+/* =========================
+   ADMIN PAGE
+========================= */
+
+function adminPage(res) {
+    const html = `<!doctype html>
 <html lang="ru">
-
 <head>
-
 <meta charset="utf-8">
-
-<meta
-    name="viewport"
-    content="width=device-width,initial-scale=1"
->
-
-<title>
-MM2 SHOP — Админка
-</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MM2 SHOP — Админка</title>
 
 <style>
+*{box-sizing:border-box}
 
-* {
-    box-sizing:border-box;
-}
-
-body {
-
+body{
     margin:0;
-
     min-height:100vh;
-
-    background:
-        radial-gradient(
-            circle at 50% 0,
-            rgba(243,198,91,.14),
-            transparent 35%
-        ),
-        #070707;
-
+    background:#070707;
     color:#fff;
-
-    font-family:
-        Inter,
-        Arial,
-        sans-serif;
-
+    font-family:Arial, sans-serif;
     padding:24px;
-
 }
 
-.wrap {
-
+.wrap{
     max-width:1100px;
-
     margin:auto;
-
 }
 
-.card {
-
-    background:
-        rgba(17,17,17,.95);
-
-    border:
-        1px solid
-        rgba(243,198,91,.2);
-
-    border-radius:22px;
-
+.card{
+    background:#111;
+    border:1px solid #292929;
+    border-radius:20px;
     padding:24px;
-
-    box-shadow:
-        0 25px 80px
-        rgba(0,0,0,.4);
-
 }
 
-#login {
-
+#login{
     max-width:430px;
-
     margin:10vh auto;
-
 }
 
-.crown {
-
-    width:64px;
-    height:64px;
-
-    border-radius:18px;
-
-    display:grid;
-    place-items:center;
-
-    margin:
-        0 auto 18px;
-
-    background:
-        linear-gradient(
-            145deg,
-            #ffe08a,
-            #b77b18
-        );
-
-    font-size:30px;
-
-    color:#15100a;
-
+h1{
+    margin-top:0;
 }
 
-.badge {
-
-    text-align:center;
-
-    color:#e4b64e;
-
-    font-size:11px;
-
-    font-weight:800;
-
-    letter-spacing:3px;
-
-}
-
-.login-title {
-
-    text-align:center;
-
-    font-size:29px;
-
-    margin:9px 0;
-
-}
-
-.muted {
-
-    color:#888;
-
-}
-
-.login-sub {
-
-    text-align:center;
-
-    font-size:14px;
-
-    margin:
-        0 0 26px;
-
-}
-
-.field {
-
-    margin-bottom:14px;
-
-}
-
-.field label {
-
-    display:block;
-
-    font-size:13px;
-
-    font-weight:700;
-
-    color:#bbb;
-
-    margin-bottom:8px;
-
-}
-
-input {
-
+input{
     width:100%;
-
-    height:52px;
-
-    border-radius:14px;
-
-    border:
-        1px solid #303030;
-
-    background:#141414;
-
+    height:50px;
+    padding:0 15px;
+    border-radius:12px;
+    border:1px solid #333;
+    background:#181818;
     color:#fff;
-
-    padding:
-        0 16px;
-
-    font-size:15px;
-
-    outline:none;
-
+    margin:8px 0 15px;
 }
 
-input:focus {
-
-    border-color:#dca52e;
-
-    box-shadow:
-        0 0 0 4px
-        rgba(220,165,46,.08);
-
-}
-
-.btn {
-
+button{
     border:0;
-
-    border-radius:13px;
-
-    padding:
-        12px 16px;
-
-    font-weight:800;
-
-    cursor:pointer;
-
-}
-
-.gold {
-
-    width:100%;
-
-    height:52px;
-
-    background:
-        linear-gradient(
-            100deg,
-            #d99a25,
-            #ffe18a,
-            #d99a25
-        );
-
-    color:#171109;
-
-}
-
-.error {
-
-    min-height:20px;
-
-    color:#ff6d78;
-
-    text-align:center;
-
-    margin-top:10px;
-
-}
-
-.top {
-
-    display:flex;
-
-    justify-content:space-between;
-
-    gap:15px;
-
-    align-items:center;
-
-    flex-wrap:wrap;
-
-}
-
-.actions {
-
-    display:flex;
-
-    gap:8px;
-
-}
-
-.darkbtn {
-
-    background:#191919;
-
-    color:#fff;
-
-    border:
-        1px solid #333;
-
-}
-
-.danger {
-
-    background:#35141a;
-
-    color:#ff8490;
-
-    border:
-        1px solid #5a252d;
-
-}
-
-.count {
-
-    margin-top:18px;
-
-    font-size:18px;
-
-}
-
-.order {
-
-    margin-top:14px;
-
-    padding:18px;
-
-    border:
-        1px solid #2a2a2a;
-
-    border-radius:16px;
-
-    background:#101010;
-
-}
-
-.grid {
-
-    display:grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(170px,1fr)
-        );
-
-    gap:10px;
-
-    margin-top:13px;
-
-}
-
-.fieldbox {
-
-    background:#171717;
-
-    padding:11px;
-
     border-radius:11px;
-
-    color:#999;
-
-    font-size:12px;
-
+    padding:12px 16px;
+    cursor:pointer;
+    font-weight:800;
 }
 
-.fieldbox b {
+.gold{
+    width:100%;
+    background:#e1b44d;
+    color:#111;
+}
 
-    display:block;
-
+.dark{
+    background:#222;
     color:#fff;
+}
 
-    font-size:14px;
+.delete{
+    background:#401820;
+    color:#ff8793;
+}
 
+.top{
+    display:flex;
+    justify-content:space-between;
+    gap:15px;
+    align-items:center;
+    flex-wrap:wrap;
+}
+
+.order{
+    margin-top:15px;
+    padding:18px;
+    background:#101010;
+    border:1px solid #292929;
+    border-radius:16px;
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+    gap:10px;
+    margin-top:15px;
+}
+
+.box{
+    padding:12px;
+    background:#181818;
+    border-radius:10px;
+    color:#999;
+    font-size:12px;
+}
+
+.box b{
+    display:block;
+    color:#fff;
     margin-top:5px;
-
     word-break:break-word;
-
 }
 
-.status {
-
+.status{
     display:inline-block;
-
-    padding:
-        5px 9px;
-
-    border-radius:999px;
-
+    padding:6px 10px;
+    border-radius:20px;
+    background:#183b28;
+    color:#76e9a0;
     font-size:11px;
-
 }
 
-.waiting {
-
-    background:#3a3218;
-
-    color:#ffd86a;
-
+.waiting{
+    background:#3a3015;
+    color:#f3d36d;
 }
 
-.paid {
-
-    background:#173c28;
-
-    color:#70f0a0;
-
+.paid{
+    background:#143b2b;
+    color:#76e9a0;
 }
 
-.completed {
-
-    background:#17374a;
-
-    color:#72d9ff;
-
-}
-
-.empty {
-
-    padding:35px;
-
+.empty{
+    margin-top:15px;
     text-align:center;
-
     color:#777;
-
 }
 
+.actions{
+    display:flex;
+    gap:8px;
+}
 </style>
-
 </head>
 
 <body>
 
 <div class="wrap">
 
-<div
-    id="login"
-    class="card"
+<div id="login" class="card">
+
+<h2>♛ MM2 SHOP</h2>
+<p>Вход в админ-панель</p>
+
+<input
+    id="password"
+    type="password"
+    placeholder="Пароль"
 >
 
-    <div class="crown">
-        ♛
-    </div>
+<button
+    class="gold"
+    onclick="login()"
+>
+    Войти
+</button>
 
-    <div class="badge">
-        MM2 SHOP
-    </div>
-
-    <h1 class="login-title">
-        Вход в админ-панель
-    </h1>
-
-    <p class="muted login-sub">
-        Доступ только владельцу магазина
-    </p>
-
-    <div class="field">
-
-        <label>
-            Секретный пароль
-        </label>
-
-        <input
-            id="pass"
-            type="password"
-            placeholder="Введите пароль"
-        >
-
-    </div>
-
-    <button
-        class="btn gold"
-        onclick="login()"
-    >
-        Войти →
-    </button>
-
-    <div
-        id="loginErr"
-        class="error"
-    ></div>
+<div
+    id="loginError"
+    style="color:#ff6675;margin-top:12px"
+></div>
 
 </div>
-
 
 <div
     id="panel"
     style="display:none"
 >
 
-    <div class="top">
+<div class="top">
 
-        <div>
+<div>
+<h1>📦 Заказы MM2</h1>
+<p style="color:#777">
+Заказы обновляются автоматически.
+</p>
+</div>
 
-            <h1 style="margin:0">
-                📦 Заказы MM2
-            </h1>
+<div class="actions">
+<button class="dark" onclick="loadOrders()">
+↻ Обновить
+</button>
 
-            <div class="muted">
-                Заказы обновляются автоматически.
-            </div>
-
-        </div>
-
-        <div class="actions">
-
-            <button
-                class="btn darkbtn"
-                onclick="loadOrders()"
-            >
-                ↻ Обновить
-            </button>
-
-            <button
-                class="btn darkbtn"
-                onclick="logout()"
-            >
-                Выйти
-            </button>
-
-        </div>
-
-    </div>
-
-
-    <div class="card count">
-
-        Всего заказов:
-        <b id="count">
-            0
-        </b>
-
-    </div>
-
-
-    <div id="orders"></div>
-
+<button class="dark" onclick="logout()">
+Выйти
+</button>
 </div>
 
 </div>
 
+<div
+    class="card"
+    style="margin-top:15px"
+>
+Всего заказов:
+<b id="count">0</b>
+</div>
+
+<div id="orders"></div>
+
+</div>
+
+</div>
 
 <script>
 
-const esc = value =>
-
-String(value ?? "")
-
-.replace(
-    /[&<>'"]/g,
-
-    char => ({
-
-        "&":"&amp;",
-        "<":"&lt;",
-        ">":"&gt;",
-        "'":"&#39;",
-        '"':"&quot;"
-
-    }[char])
-
-);
-
-
-function statusText(
-    status
-) {
-
-    if (
-        status ===
-        "waiting_payment"
-    ) {
-
-        return [
-            "waiting",
-            "⏳ Ожидает оплаты"
-        ];
-
-    }
-
-
-    if (
-        status ===
-        "paid_waiting_data"
-    ) {
-
-        return [
-            "paid",
-            "💳 Оплачено"
-        ];
-
-    }
-
-
-    if (
-        status ===
-        "completed"
-    ) {
-
-        return [
-            "completed",
-            "✅ Заказ оформлен"
-        ];
-
-    }
-
-
-    return [
-        "waiting",
-        status
-    ];
-
+function esc(value){
+    return String(value ?? '')
+        .replace(/[&<>'"]/g,function(char){
+            return {
+                '&':'&amp;',
+                '<':'&lt;',
+                '>':'&gt;',
+                "'":'&#39;',
+                '"':'&quot;'
+            }[char];
+        });
 }
 
+function statusText(status){
+    if(status === 'waiting_payment'){
+        return 'Ожидает оплаты';
+    }
 
-async function login() {
+    if(status === 'paid'){
+        return 'Оплачено';
+    }
+
+    return 'Данные получены';
+}
+
+function statusClass(status){
+    if(status === 'waiting_payment'){
+        return 'status waiting';
+    }
+
+    if(status === 'paid'){
+        return 'status paid';
+    }
+
+    return 'status';
+}
+
+async function login(){
 
     const password =
-        document.getElementById(
-            "pass"
-        ).value;
+        document.getElementById('password').value;
 
+    const response = await fetch(
+        '/api/admin/login',
+        {
+            method:'POST',
+            headers:{
+                'Content-Type':'application/json'
+            },
+            body:JSON.stringify({
+                password:password
+            })
+        }
+    );
 
-    const response =
-        await fetch(
-            "/api/admin/login",
-            {
+    if(response.ok){
 
-                method:"POST",
+        document.getElementById('login')
+            .style.display='none';
 
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body:
-                    JSON.stringify({
-                        password
-                    })
-
-            }
-        );
-
-
-    if (response.ok) {
-
-        document.getElementById(
-            "login"
-        ).style.display =
-            "none";
-
-
-        document.getElementById(
-            "panel"
-        ).style.display =
-            "block";
-
+        document.getElementById('panel')
+            .style.display='block';
 
         loadOrders();
 
+    }else{
 
-    } else {
-
-        document.getElementById(
-            "loginErr"
-        ).textContent =
-            "❌ Неверный пароль";
-
+        document.getElementById('loginError')
+            .textContent='❌ Неверный пароль';
     }
-
 }
 
+async function loadOrders(){
 
-async function loadOrders() {
+    const response = await fetch(
+        '/api/admin/orders',
+        {
+            cache:'no-store'
+        }
+    );
 
-    const response =
-        await fetch(
-            "/api/admin/orders",
-            {
-                cache:"no-store"
-            }
-        );
+    if(response.status === 401){
 
+        document.getElementById('login')
+            .style.display='block';
 
-    if (
-        response.status ===
-        401
-    ) {
+        document.getElementById('panel')
+            .style.display='none';
 
         return;
-
     }
 
+    const data = await response.json();
 
-    const data =
-        await response.json();
-
-
-    document.getElementById(
-        "count"
-    ).textContent =
-        data.orders.length;
-
+    document.getElementById('count')
+        .textContent=data.orders.length;
 
     const box =
-        document.getElementById(
-            "orders"
-        );
+        document.getElementById('orders');
 
-
-    if (
-        !data.orders.length
-    ) {
+    if(!data.orders.length){
 
         box.innerHTML =
             '<div class="card empty">Пока заказов нет.</div>';
 
         return;
-
     }
 
+    box.innerHTML=data.orders.map(function(order){
 
-    box.innerHTML =
-        data.orders.map(
-            order => {
+        return \`
+        <div class="order">
 
-                const [
-                    statusClass,
-                    statusName
-                ] =
-                    statusText(
-                        order.status
-                    );
+            <div class="top">
 
+                <b>
+                    Заказ #\${esc(order.id)}
+                </b>
 
-                return `
+                <span class="\${statusClass(order.status)}">
+                    \${esc(statusText(order.status))}
+                </span>
 
-<div class="order">
+            </div>
 
-    <div class="top">
+            <div class="grid">
 
-        <b>
-            Заказ #${esc(order.id)}
-        </b>
+                <div class="box">
+                    🛒 Товар
+                    <b>\${esc(order.product)}</b>
+                </div>
 
-        <span
-            class="status ${statusClass}"
-        >
-            ${statusName}
-        </span>
+                <div class="box">
+                    💰 Цена
+                    <b>\${esc(order.price)}</b>
+                </div>
 
-    </div>
+                <div class="box">
+                    💳 Платёж
+                    <b>\${esc(order.payment_label || '—')}</b>
+                </div>
 
+                <div class="box">
+                    👤 Telegram
+                    <b>\${esc(order.telegram || 'Ожидается')}</b>
+                </div>
 
-    <div class="grid">
+                <div class="box">
+                    🎮 Roblox
+                    <b>\${esc(order.nickname || 'Ожидается')}</b>
+                </div>
 
-        <div class="fieldbox">
+                <div class="box">
+                    🕒 Дата
+                    <b>\${esc(order.date)}</b>
+                </div>
 
-            🛒 Товар
+                <div class="box">
+                    🔐 ID операции
+                    <b>\${esc(order.operation_id || '—')}</b>
+                </div>
 
-            <b>
-                ${esc(order.product)}
-            </b>
+                <div class="box">
 
-        </div>
+                    <button
+                        class="delete"
+                        onclick="deleteOrder('\${esc(order.id)}')"
+                    >
+                        🗑 Удалить
+                    </button>
 
+                </div>
 
-        <div class="fieldbox">
-
-            💰 Цена
-
-            <b>
-                ${esc(order.price)}
-            </b>
-
-        </div>
-
-
-        <div class="fieldbox">
-
-            👤 Telegram
-
-            <b>
-                ${
-                    esc(
-                        order.telegram ||
-                        "Ожидается"
-                    )
-                }
-            </b>
+            </div>
 
         </div>
+        \`;
 
-
-        <div class="fieldbox">
-
-            🎮 Roblox
-
-            <b>
-                ${
-                    esc(
-                        order.nickname ||
-                        "Ожидается"
-                    )
-                }
-            </b>
-
-        </div>
-
-
-        <div class="fieldbox">
-
-            💳 Оплата
-
-            <b>
-                ${
-                    order.payment_operation_id
-                        ? "Операция " +
-                          esc(
-                              order.payment_operation_id
-                          )
-                        : "Ожидается"
-                }
-            </b>
-
-        </div>
-
-
-        <div class="fieldbox">
-
-            🕒 Дата
-
-            <b>
-                ${esc(order.date)}
-            </b>
-
-        </div>
-
-
-        <div
-            class="fieldbox"
-            style="
-                display:flex;
-                align-items:end;
-            "
-        >
-
-            <button
-                class="btn danger"
-                onclick="deleteOrder('${esc(order.id)}')"
-            >
-                Удалить
-            </button>
-
-        </div>
-
-    </div>
-
-</div>
-
-`;
-
-            }
-        ).join("");
-
+    }).join('');
 }
 
+async function deleteOrder(id){
 
-async function deleteOrder(
-    id
-) {
-
-    if (
-        !confirm(
-            "Удалить этот заказ?"
-        )
-    ) {
-
+    if(!confirm('Удалить этот заказ?')){
         return;
-
     }
 
+    const response = await fetch(
+        '/api/admin/orders/' +
+        encodeURIComponent(id),
+        {
+            method:'DELETE'
+        }
+    );
 
-    const response =
-        await fetch(
-            "/api/admin/orders/" +
-            encodeURIComponent(id),
-            {
-                method:"DELETE"
-            }
-        );
-
-
-    if (response.ok) {
-
+    if(response.ok){
         loadOrders();
-
     }
-
 }
 
-
-async function logout() {
+async function logout(){
 
     await fetch(
-        "/api/admin/logout",
+        '/api/admin/logout',
         {
-            method:"POST"
+            method:'POST'
         }
     );
-
 
     location.reload();
-
 }
 
-
 document
-    .getElementById("pass")
-    .addEventListener(
-        "keydown",
-        event => {
+    .getElementById('password')
+    .addEventListener('keydown',function(event){
 
-            if (
-                event.key ===
-                "Enter"
-            ) {
-
-                login();
-
-            }
-
+        if(event.key === 'Enter'){
+            login();
         }
-    );
+
+    });
+
+setInterval(function(){
+
+    const panel =
+        document.getElementById('panel');
+
+    if(panel.style.display !== 'none'){
+        loadOrders();
+    }
+
+},15000);
 
 </script>
 
 </body>
+</html>`;
 
-</html>
-
-`;
-
-    res.writeHead(
-        200,
-        {
-            "Content-Type":
-                "text/html; charset=utf-8",
-
-            "Cache-Control":
-                "no-store"
-        }
-    );
+    res.writeHead(200,{
+        'Content-Type':'text/html; charset=utf-8',
+        'Cache-Control':'no-store'
+    });
 
     res.end(html);
-
 }
 
+/* =========================
+   REQUEST HANDLER
+========================= */
 
-// ======================================================
-// REQUEST HANDLER
-// ======================================================
+async function handle(req,res){
 
-async function handle(
-    req,
-    res
-) {
+    const parsed = new URL(
+        req.url,
+        'http://' +
+        (req.headers.host || 'localhost')
+    );
 
-    const parsed =
-        new URL(
-            req.url,
-            `http://${req.headers.host || "localhost"}`
-        );
+    /* CREATE PAYMENT */
 
+    if(
+        req.method === 'POST' &&
+        parsed.pathname === '/api/payment/create'
+    ){
 
-    // ==================================================
-    // CREATE PAYMENT ORDER
-    // ==================================================
-
-    if (
-        req.method === "POST" &&
-        parsed.pathname ===
-            "/api/payment/create"
-    ) {
-
-        try {
+        try{
 
             const input =
-                JSON.parse(
-                    await readBody(req)
-                );
-
+                JSON.parse(await readBody(req));
 
             const product =
-                String(
-                    input.product || ""
-                )
-                    .trim()
-                    .slice(0,100);
+                String(input.product || '').trim();
 
+            const clientPrice =
+                normalizePrice(input.price);
 
-            const price =
-                String(
-                    input.price || ""
-                )
-                    .trim()
-                    .slice(0,50);
-
-
-            if (
-                !product ||
-                !price
-            ) {
-
-                return json(
-                    res,
-                    400,
-                    {
-                        success:false,
-                        error:
-                            "Не указан товар."
-                    }
-                );
-
+            if(!product){
+                return json(res,400,{
+                    success:false,
+                    error:'Товар не указан.'
+                });
             }
 
+            if(!PRODUCTS[product]){
+                return json(res,400,{
+                    success:false,
+                    error:'Такого товара нет.'
+                });
+            }
+
+            const serverPrice =
+                PRODUCTS[product];
+
+            if(
+                !Number.isFinite(clientPrice) ||
+                clientPrice !== serverPrice
+            ){
+                return json(res,400,{
+                    success:false,
+                    error:'Неверная цена товара.'
+                });
+            }
 
             const order =
                 await createPendingOrder(
                     product,
-                    price
+                    serverPrice
                 );
 
-
-            if (!YOOMONEY_RECEIVER) {
-
-                return json(
-                    res,
-                    500,
-                    {
-                        success:false,
-                        error:
-                            "YOOMONEY_RECEIVER не настроен."
-                    }
+            const baseUrl =
+                process.env.RENDER_EXTERNAL_URL ||
+                (
+                    'https://' +
+                    (
+                        req.headers.host ||
+                        'mm2-shop.onrender.com'
+                    )
                 );
 
-            }
+            return json(res,200,{
+                success:true,
+                orderId:order.id,
+                label:order.payment_label,
+                receiver:YOOMONEY_RECEIVER,
+                sum:serverPrice,
+                successURL:
+                    baseUrl +
+                    '/?payment=success&order=' +
+                    encodeURIComponent(order.id)
+            });
 
-
-            const amount =
-                moneyToNumber(
-                    price
-                );
-
-
-            if (
-                amount === null
-            ) {
-
-                return json(
-                    res,
-                    400,
-                    {
-                        success:false,
-                        error:
-                            "Некорректная цена."
-                    }
-                );
-
-            }
-
-
-            // Официальный quickpay
-            // ЮMoney получает label =
-            // номер нашего заказа
-
-            const paymentUrl =
-                new URL(
-                    "https://yoomoney.ru/quickpay/confirm"
-                );
-
-
-            paymentUrl.searchParams.set(
-                "receiver",
-                YOOMONEY_RECEIVER
-            );
-
-
-            paymentUrl.searchParams.set(
-                "quickpay-form",
-                "shop"
-            );
-
-
-            paymentUrl.searchParams.set(
-                "targets",
-                `MM2 SHOP — ${product}`
-            );
-
-
-            paymentUrl.searchParams.set(
-                "sum",
-                amount.toFixed(2)
-            );
-
-
-            paymentUrl.searchParams.set(
-                "label",
-                order.payment_label
-            );
-
-
-            paymentUrl.searchParams.set(
-                "successURL",
-                `${getPublicBaseUrl(req)}/?payment=success&order=${encodeURIComponent(order.id)}`
-            );
-
-
-            return json(
-                res,
-                201,
-                {
-                    success:true,
-
-                    orderId:
-                        order.id,
-
-                    status:
-                        order.status,
-
-                    paymentUrl:
-                        paymentUrl.toString()
-                }
-            );
-
-
-        } catch (error) {
+        }catch(error){
 
             console.error(error);
 
-            return json(
-                res,
-                500,
-                {
-                    success:false,
-                    error:
-                        "Не удалось создать заказ."
-                }
-            );
-
+            return json(res,500,{
+                success:false,
+                error:'Не удалось создать платёж.'
+            });
         }
-
     }
 
+    /* PAYMENT STATUS */
 
-    // ==================================================
-    // CHECK PAYMENT
-    // ==================================================
-
-    if (
-        req.method === "GET" &&
-        parsed.pathname ===
-            "/api/payment/status"
-    ) {
+    if(
+        req.method === 'GET' &&
+        parsed.pathname === '/api/payment/status'
+    ){
 
         const id =
-            String(
-                parsed.searchParams.get(
-                    "id"
-                ) || ""
-            );
+            parsed.searchParams.get('order');
 
-
-        if (!id) {
-
-            return json(
-                res,
-                400,
-                {
-                    success:false
-                }
-            );
-
+        if(!id){
+            return json(res,400,{
+                success:false
+            });
         }
-
 
         const order =
             await getOrder(id);
 
-
-        if (!order) {
-
-            return json(
-                res,
-                404,
-                {
-                    success:false
-                }
-            );
-
+        if(!order){
+            return json(res,404,{
+                success:false,
+                error:'Заказ не найден.'
+            });
         }
 
-
-        return json(
-            res,
-            200,
-            {
-                success:true,
-
-                orderId:
-                    order.id,
-
-                status:
-                    order.status,
-
-                product:
-                    order.product,
-
-                price:
-                    order.price
-
-            }
-        );
-
+        return json(res,200,{
+            success:true,
+            status:order.status,
+            order:order
+        });
     }
 
+    /* SAVE USER DATA */
 
-    // ==================================================
-    // SAVE USER DATA
-    // ==================================================
+    if(
+        req.method === 'POST' &&
+        parsed.pathname === '/api/orders'
+    ){
 
-    if (
-        req.method === "POST" &&
-        parsed.pathname ===
-            "/api/orders"
-    ) {
-
-        try {
+        try{
 
             const input =
-                JSON.parse(
-                    await readBody(req)
-                );
-
+                JSON.parse(await readBody(req));
 
             const id =
-                String(
-                    input.orderId || ""
-                )
-                    .trim()
-                    .slice(0,100);
-
+                String(input.orderId || '').trim();
 
             const telegram =
-                String(
-                    input.telegram || ""
-                )
+                String(input.telegram || '')
                     .trim()
-                    .slice(0,50);
-
+                    .slice(0,80);
 
             const nickname =
-                String(
-                    input.nickname || ""
-                )
+                String(input.nickname || '')
                     .trim()
-                    .slice(0,50);
+                    .slice(0,80);
 
-
-            if (
+            if(
                 !id ||
                 !telegram ||
                 !nickname
-            ) {
+            ){
 
-                return json(
-                    res,
-                    400,
-                    {
-                        success:false,
-                        error:
-                            "Заполни все поля."
-                    }
-                );
-
+                return json(res,400,{
+                    success:false,
+                    error:'Заполни Telegram и Roblox ник.'
+                });
             }
-
 
             const order =
-                await getOrder(id);
-
-
-            if (!order) {
-
-                return json(
-                    res,
-                    404,
-                    {
-                        success:false,
-                        error:
-                            "Заказ не найден."
-                    }
-                );
-
-            }
-
-
-            // НЕЛЬЗЯ ПЕРЕДАВАТЬ ДАННЫЕ
-            // ДО ОПЛАТЫ
-
-            if (
-                order.status !==
-                    "paid_waiting_data"
-            ) {
-
-                return json(
-                    res,
-                    403,
-                    {
-                        success:false,
-                        error:
-                            "Сначала необходимо оплатить заказ."
-                    }
-                );
-
-            }
-
-
-            const saved =
-                await saveCustomerData(
+                await saveUserData(
                     id,
                     telegram,
                     nickname
                 );
 
+            if(!order){
 
-            if (!saved) {
-
-                return json(
-                    res,
-                    404,
-                    {
-                        success:false
-                    }
-                );
-
+                return json(res,400,{
+                    success:false,
+                    error:
+                        'Оплата ещё не подтверждена или заказ не найден.'
+                });
             }
 
+            return json(res,200,{
+                success:true,
+                order:order
+            });
 
-            const completed =
-                await markOrderCompleted(
-                    id
-                );
-
-
-            return json(
-                res,
-                200,
-                {
-                    success:true,
-
-                    order:
-                        completed ||
-                        saved
-                }
-            );
-
-
-        } catch (error) {
+        }catch(error){
 
             console.error(error);
 
-            return json(
-                res,
-                500,
-                {
-                    success:false,
-                    error:
-                        "Не удалось сохранить заказ."
-                }
-            );
-
+            return json(res,400,{
+                success:false,
+                error:'Не удалось сохранить заказ.'
+            });
         }
-
     }
 
+    /* YOOMONEY NOTIFICATION */
 
-    // ==================================================
-    // YOOMONEY WEBHOOK
-    // ==================================================
+    if(
+        req.method === 'POST' &&
+        parsed.pathname === '/api/yoomoney/notification'
+    ){
 
-    if (
-        req.method === "POST" &&
-        parsed.pathname ===
-            "/api/yoomoney/notification"
-    ) {
-
-        try {
+        try{
 
             const body =
-                await readBody(req);
-
+                await readBody(req,50000);
 
             const params =
                 Object.fromEntries(
-                    new URLSearchParams(
-                        body
-                    )
+                    new URLSearchParams(body)
                 );
 
-
             console.log(
-                "YuMoney notification:",
+                'YuMoney notification:',
                 params
             );
 
-
-            if (
-                !verifyYuMoneySignature(
-                    params
-                )
-            ) {
+            if(
+                !verifyYooMoneySignature(params)
+            ){
 
                 console.error(
-                    "Invalid YuMoney signature"
+                    'YuMoney: invalid signature'
                 );
 
-
-                return json(
-                    res,
-                    403,
-                    {
-                        success:false
-                    }
-                );
-
+                return json(res,403,{
+                    success:false
+                });
             }
 
+            if(
+                params.currency !== '643'
+            ){
+
+                return json(res,400,{
+                    success:false
+                });
+            }
+
+            if(
+                params.unaccepted === 'true'
+            ){
+
+                return json(res,200,{
+                    success:true
+                });
+            }
 
             const label =
-                String(
-                    params.label || ""
-                );
-
+                String(params.label || '').trim();
 
             const operationId =
                 String(
-                    params.operation_id ||
-                    ""
+                    params.operation_id || ''
+                ).trim();
+
+            const withdrawAmount =
+                Number(
+                    params.withdraw_amount
                 );
 
-
-            const amount =
-                String(
-                    params.amount ||
-                    ""
-                );
-
-
-            if (
+            if(
                 !label ||
                 !operationId ||
-                !amount
-            ) {
+                !Number.isFinite(withdrawAmount)
+            ){
 
-                return json(
-                    res,
-                    400,
-                    {
-                        success:false
-                    }
-                );
-
+                return json(res,400,{
+                    success:false
+                });
             }
-
 
             const order =
-                await getOrder(
-                    label
-                );
+                await getOrderByLabel(label);
 
-
-            if (!order) {
+            if(!order){
 
                 console.error(
-                    "Order not found:",
+                    'YuMoney: order not found:',
                     label
                 );
 
-
-                // Отвечаем 200,
-                // чтобы ЮMoney не повторял
-                // неизвестное уведомление
-
-                return json(
-                    res,
-                    200,
-                    {
-                        success:false,
-                        ignored:true
-                    }
-                );
-
+                return json(res,200,{
+                    success:true
+                });
             }
 
+            const expectedPrice =
+                normalizePrice(order.price);
 
-            if (
-                order.status !==
-                    "waiting_payment"
-            ) {
+            /*
+              Проверяем именно withdraw_amount:
+              это сумма, которую отправитель
+              реально списал.
 
-                return json(
-                    res,
-                    200,
-                    {
-                        success:true,
-                        alreadyProcessed:true
-                    }
-                );
+              amount может быть меньше из-за
+              комиссии ЮMoney.
+            */
 
-            }
-
-
-            const expectedAmount =
-                moneyToNumber(
-                    order.price
-                );
-
-
-            const incomingAmount =
-                moneyToNumber(
-                    amount
-                );
-
-
-            if (
-                expectedAmount === null ||
-                incomingAmount === null ||
+            if(
                 Math.abs(
-                    expectedAmount -
-                    incomingAmount
-                ) > 0.001
-            ) {
+                    withdrawAmount -
+                    expectedPrice
+                ) > 0.01
+            ){
 
                 console.error(
-                    "Wrong payment amount:",
-                    {
-                        expected:
-                            expectedAmount,
-
-                        incoming:
-                            incomingAmount
-                    }
+                    'YuMoney: wrong amount',
+                    withdrawAmount,
+                    expectedPrice
                 );
 
-
-                return json(
-                    res,
-                    400,
-                    {
-                        success:false,
-                        error:
-                            "Неверная сумма."
-                    }
-                );
-
+                return json(res,400,{
+                    success:false
+                });
             }
 
-
-            await markOrderPaid(
+            await markPaid(
                 label,
-                operationId,
-                amount
+                operationId
             );
-
 
             console.log(
-                "PAYMENT CONFIRMED:",
-                label,
-                amount
+                'PAYMENT CONFIRMED:',
+                order.id
             );
 
+            return json(res,200,{
+                success:true
+            });
 
-            return json(
-                res,
-                200,
-                {
-                    success:true
-                }
-            );
-
-
-        } catch (error) {
+        }catch(error){
 
             console.error(
-                "YuMoney webhook error:",
+                'YuMoney notification error:',
                 error
             );
 
-
-            return json(
-                res,
-                500,
-                {
-                    success:false
-                }
-            );
-
+            return json(res,500,{
+                success:false
+            });
         }
-
     }
 
+    /* ADMIN LOGIN */
 
-    // ==================================================
-    // ADMIN LOGIN
-    // ==================================================
+    if(
+        req.method === 'POST' &&
+        parsed.pathname === '/api/admin/login'
+    ){
 
-    if (
-        req.method === "POST" &&
-        parsed.pathname ===
-            "/api/admin/login"
-    ) {
-
-        try {
+        try{
 
             const input =
-                JSON.parse(
-                    await readBody(req)
-                );
+                JSON.parse(await readBody(req));
 
-
-            if (
-                String(
-                    input.password || ""
-                ) !==
+            if(
+                String(input.password || '') !==
                 ADMIN_PASSWORD
-            ) {
+            ){
 
-                return json(
-                    res,
-                    401,
-                    {
-                        success:false
-                    }
-                );
-
+                return json(res,401,{
+                    success:false
+                });
             }
 
-
             const token =
-                crypto
-                    .randomBytes(32)
-                    .toString("hex");
-
+                crypto.randomBytes(32)
+                    .toString('hex');
 
             sessions.set(
                 token,
                 Date.now()
             );
 
-
-            const secure =
-                process.env.NODE_ENV ===
-                "production"
-                    ? " Secure;"
-                    : "";
-
-
-            res.writeHead(
-                200,
-                {
-                    "Content-Type":
-                        "application/json",
-
-                    "Cache-Control":
-                        "no-store",
-
-                    "Set-Cookie":
-                        `admin_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${secure}`
-                }
-            );
-
+            res.writeHead(200,{
+                'Content-Type':
+                    'application/json; charset=utf-8',
+                'Cache-Control':'no-store',
+                'Set-Cookie':
+                    'admin_session=' +
+                    token +
+                    '; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'
+            });
 
             return res.end(
                 JSON.stringify({
@@ -2926,366 +1439,192 @@ async function handle(
                 })
             );
 
+        }catch{
 
-        } catch {
-
-            return json(
-                res,
-                400,
-                {
-                    success:false
-                }
-            );
-
+            return json(res,400,{
+                success:false
+            });
         }
-
     }
 
+    /* ADMIN LOGOUT */
 
-    // ==================================================
-    // ADMIN LOGOUT
-    // ==================================================
-
-    if (
-        req.method === "POST" &&
-        parsed.pathname ===
-            "/api/admin/logout"
-    ) {
+    if(
+        req.method === 'POST' &&
+        parsed.pathname === '/api/admin/logout'
+    ){
 
         const token =
-            parseCookies(req)
-                .admin_session;
+            parseCookies(req).admin_session;
 
-
-        if (token) {
-
-            sessions.delete(
-                token
-            );
-
+        if(token){
+            sessions.delete(token);
         }
 
-
-        res.writeHead(
-            200,
-            {
-                "Content-Type":
-                    "application/json",
-
-                "Set-Cookie":
-                    "admin_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
-            }
-        );
-
+        res.writeHead(200,{
+            'Content-Type':
+                'application/json; charset=utf-8',
+            'Set-Cookie':
+                'admin_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'
+        });
 
         return res.end(
             JSON.stringify({
                 success:true
             })
         );
-
     }
 
+    /* ADMIN ORDERS */
 
-    // ==================================================
-    // ADMIN ORDERS
-    // ==================================================
+    if(
+        req.method === 'GET' &&
+        parsed.pathname === '/api/admin/orders'
+    ){
 
-    if (
-        req.method === "GET" &&
-        parsed.pathname ===
-            "/api/admin/orders"
-    ) {
+        if(!isAdmin(req)){
 
-        if (!isAdmin(req)) {
-
-            return json(
-                res,
-                401,
-                {
-                    error:
-                        "Требуется вход"
-                }
-            );
-
+            return json(res,401,{
+                error:'Требуется вход'
+            });
         }
 
-
-        try {
-
-            return json(
-                res,
-                200,
-                {
-                    orders:
-                        await getOrders()
-                }
-            );
-
-        } catch {
-
-            return json(
-                res,
-                500,
-                {
-                    error:
-                        "Ошибка базы данных"
-                }
-            );
-
-        }
-
+        return json(res,200,{
+            orders:await getOrders()
+        });
     }
 
+    /* DELETE ORDER */
 
-    // ==================================================
-    // DELETE ORDER
-    // ==================================================
-
-    if (
-        req.method === "DELETE" &&
+    if(
+        req.method === 'DELETE' &&
         parsed.pathname.startsWith(
-            "/api/admin/orders/"
+            '/api/admin/orders/'
         )
-    ) {
+    ){
 
-        if (!isAdmin(req)) {
+        if(!isAdmin(req)){
 
-            return json(
-                res,
-                401,
-                {
-                    error:
-                        "Требуется вход"
-                }
-            );
-
+            return json(res,401,{
+                error:'Требуется вход'
+            });
         }
-
 
         const id =
             decodeURIComponent(
                 parsed.pathname
-                    .split("/")
+                    .split('/')
                     .pop()
             );
 
+        await deleteOrder(id);
 
-        try {
-
-            await deleteOrder(
-                id
-            );
-
-
-            return json(
-                res,
-                200,
-                {
-                    success:true
-                }
-            );
-
-        } catch {
-
-            return json(
-                res,
-                500,
-                {
-                    success:false
-                }
-            );
-
-        }
-
+        return json(res,200,{
+            success:true
+        });
     }
 
+    /* ADMIN PAGE */
 
-    // ==================================================
-    // ADMIN
-    // ==================================================
+    if(
+        req.method === 'GET' &&
+        parsed.pathname === '/admin'
+    ){
 
-    if (
-        req.method === "GET" &&
-        parsed.pathname === "/admin"
-    ) {
-
-        return adminPage(
-            res
-        );
-
+        return adminPage(res);
     }
 
+    /* STATIC */
 
-    // ==================================================
-    // HEALTH
-    // ==================================================
-
-    if (
-        req.method === "GET" &&
-        parsed.pathname === "/health"
-    ) {
-
-        return json(
-            res,
-            200,
-            {
-                ok:true
-            }
-        );
-
-    }
-
-
-    // ==================================================
-    // STATIC
-    // ==================================================
-
-    if (
-        req.method === "GET"
-    ) {
+    if(req.method === 'GET'){
 
         const file =
-            safePath(
-                req.url
-            );
+            safePath(req.url);
 
-
-        if (
+        if(
             file &&
             fs.existsSync(file) &&
             fs.statSync(file).isFile()
-        ) {
+        ){
 
             return serveFile(
                 res,
                 file
             );
-
         }
-
     }
 
-
-    return json(
-        res,
-        404,
-        {
-            error:
-                "Не найдено"
-        }
-    );
-
+    return json(res,404,{
+        error:'Не найдено'
+    });
 }
 
+/* =========================
+   FIND ORDER BY LABEL
+========================= */
 
-// ======================================================
-// PUBLIC URL
-// ======================================================
+async function getOrderByLabel(label){
 
-function getPublicBaseUrl(
-    req
-) {
+    if(db){
 
-    const forwardedProto =
-        String(
-            req.headers[
-                "x-forwarded-proto"
-            ] || ""
-        )
-            .split(",")[0]
-            .trim();
+        const result =
+            await db.query(
+                `
+                SELECT *
+                FROM orders
+                WHERE payment_label = $1
+                LIMIT 1
+                `,
+                [label]
+            );
 
+        return result.rows[0]
+            ? formatOrder(result.rows[0])
+            : null;
+    }
 
-    const protocol =
-        forwardedProto ||
-        (
-            process.env.NODE_ENV ===
-            "production"
-                ? "https"
-                : "http"
-        );
-
-
-    const host =
-        req.headers.host ||
-        `localhost:${PORT}`;
-
-
-    return `${protocol}://${host}`;
-
+    return readOrdersLocal().find(
+        order =>
+            order.payment_label === label
+    ) || null;
 }
 
+/* =========================
+   START SERVER
+========================= */
 
-// ======================================================
-// START
-// ======================================================
-
-(async () => {
+(async()=>{
 
     await initDb();
 
-
     const server =
         http.createServer(
-            (req, res) => {
+            (req,res)=>{
 
-                handle(
-                    req,
-                    res
-                )
-                    .catch(
-                        error => {
+                handle(req,res)
+                    .catch(error=>{
 
-                            console.error(
-                                error
-                            );
+                        console.error(error);
 
-
-                            json(
-                                res,
-                                500,
-                                {
-                                    error:
-                                        "Внутренняя ошибка сервера"
-                                }
-                            );
-
-                        }
-                    );
-
+                        json(res,500,{
+                            error:
+                                'Внутренняя ошибка сервера'
+                        });
+                    });
             }
         );
 
-
     server.listen(
         PORT,
-        () => {
-
+        ()=>{
             console.log(
-                `MM2 SHOP запущен: http://localhost:${PORT}`
+                'MM2 SHOP запущен на порту ' +
+                PORT
             );
 
             console.log(
-                `Админка: http://localhost:${PORT}/admin`
+                'Админка: /admin'
             );
-
-            console.log(
-                `ЮMoney receiver: ${
-                    YOOMONEY_RECEIVER
-                        ? "configured"
-                        : "NOT configured"
-                }`
-            );
-
-            console.log(
-                `ЮMoney webhook secret: ${
-                    YOOMONEY_NOTIFICATION_SECRET
-                        ? "configured"
-                        : "NOT configured"
-                }`
-            );
-
         }
     );
 
