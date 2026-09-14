@@ -5,7 +5,8 @@
     'BioBlade': { image: 'green_knife.png', rarity: 'GODLY • KNIFE' },
     'Raygun': { image: 'green_gun.png', rarity: 'GODLY • GUN' },
     "Traveler's Gun": { image: 'pumpkin_gun.png', rarity: 'LIMITED • GUN' },
-    'Harvester': { image: 'green_bow.png', rarity: 'GODLY • BOW' }
+    'Harvester': { image: 'green_bow.png', rarity: 'GODLY • BOW' },
+    'Тест': { image: 'green_knife.png', rarity: 'TEST • 2 ₽' }
   };
 
   let currentOrder = null;
@@ -43,13 +44,17 @@
             <span class="payment-dot"></span>
             <div>
               <b>Ожидаем оплату</b>
-              <small>Сначала оплати товар через ЮMoney.</small>
+              <small id="paymentHint">Сначала оплати товар через ЮMoney.</small>
             </div>
           </div>
-          <button class="submit-purchase payment-button" id="payButton" type="button">
-            💳 Оплатить через ЮMoney
-          </button>
-          <p class="purchase-note">После подтверждения оплаты здесь автоматически появятся поля Telegram и Roblox.</p>
+          <div id="testPaymentBox" style="display:none" class="test-payment-box">
+            <div class="test-payment-title">🧪 Тестовая оплата — 2 ₽</div>
+            <iframe src="https://yoomoney.ru/quickpay/fundraise/button?billNumber=1K9GK2D1TR6.260914&" width="330" height="50" frameborder="0" allowtransparency="true" scrolling="no"></iframe>
+            <button class="submit-purchase payment-button" id="testPaidButton" type="button">✅ Я оплатил 2 ₽</button>
+            <p class="purchase-note">Это временный тестовый способ. После оплаты нажми кнопку выше.</p>
+          </div>
+          <button class="submit-purchase payment-button" id="payButton" type="button">💳 Оплатить через ЮMoney</button>
+          <p class="purchase-note" id="normalPaymentNote">После подтверждения оплаты здесь автоматически появятся поля Telegram и Roblox.</p>
         </div>
 
         <form id="userDataStep" class="purchase-form" style="display:none">
@@ -74,6 +79,7 @@
     modal.querySelector('.close-purchase').addEventListener('click', closeModal);
     modal.querySelector('.purchase-overlay').addEventListener('click', closeModal);
     modal.querySelector('#payButton').addEventListener('click', openPayment);
+    modal.querySelector('#testPaidButton').addEventListener('click', confirmTestPayment);
     modal.querySelector('#userDataStep').addEventListener('submit', submitUserData);
   }
 
@@ -91,6 +97,10 @@
     document.getElementById('purchasePrice').textContent = price;
 
     document.getElementById('paymentStep').style.display = '';
+    const isTest = product === 'Тест';
+    document.getElementById('testPaymentBox').style.display = isTest ? 'block' : 'none';
+    document.getElementById('payButton').style.display = isTest ? 'none' : '';
+    document.getElementById('normalPaymentNote').style.display = isTest ? 'none' : '';
     document.getElementById('userDataStep').style.display = 'none';
     setPaymentStatus('waiting', 'Ожидаем оплату', 'Сначала оплати товар через ЮMoney.');
 
@@ -144,6 +154,28 @@
       setPaymentStatus('error', 'Ошибка', error.message || 'Не удалось создать платёж.');
       button.disabled = true;
       button.textContent = 'Не удалось создать платёж';
+    }
+  }
+
+  async function confirmTestPayment() {
+    if (!currentOrder || !currentOrder.orderId) return;
+    const button = document.getElementById('testPaidButton');
+    button.disabled = true;
+    button.textContent = '⏳ Подтверждаем...';
+    try {
+      const response = await fetch('/api/test/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId: currentOrder.orderId })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Ошибка тестовой оплаты.');
+      stopPolling();
+      showDataStep(data.order);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = '✅ Я оплатил 2 ₽';
+      setPaymentStatus('error', 'Ошибка', error.message);
     }
   }
 
