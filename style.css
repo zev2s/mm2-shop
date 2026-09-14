@@ -246,3 +246,26 @@ footer{border-top-color:rgba(32,167,255,.10)}
 .payment-status.paid{border-color:rgba(57,255,136,.30)}
 .payment-dot{background:#20a7ff;box-shadow:0 0 14px rgba(32,167,255,.5)}
 .payment-status.paid .payment-dot{background:#39ff88;box-shadow:0 0 14px rgba(57,255,136,.5)}
+
+
+/* Движущаяся повторяющаяся предупреждающая строка */
+.test-banner {
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+}
+.test-banner-track {
+  display: flex;
+  width: max-content;
+  animation: testBannerMove 18s linear infinite;
+  will-change: transform;
+}
+.test-banner-track span {
+  display: block;
+  flex-shrink: 0;
+  padding-right: 70px;
+}
+@keyframes testBannerMove {
+  from { transform: translateX(0); }
+  to { transform: translateX(-33.333333%); }
+}
