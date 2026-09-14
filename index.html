@@ -6,17 +6,11 @@
     <title>MM2 SHOP — Roblox</title>
     <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-
-<div class="background">
-    <div class="glow glow-1"></div>
-    <div class="glow glow-2"></div>
-</div>
+<div class="background"><div class="glow glow-1"></div><div class="glow glow-2"></div></div>
 
 <header>
     <div class="logo"><span>MM2</span> SHOP</div>
-
     <nav>
         <a href="#home">Главная</a>
         <a href="#shop">Товары</a>
@@ -26,353 +20,105 @@
 </header>
 
 <section id="home" class="hero">
-
     <div class="hero-text">
-
-        <div class="badge">
-            🔥 MM2 ROBLOX SHOP
-        </div>
-
-        <h1>
-            ТВОЙ ИНВЕНТАРЬ<br>
-            <span>СТАНЕТ ЛУЧШЕ</span>
-        </h1>
-
-        <p>
-            Магазин предметов для Murder Mystery 2.
-            Выбирай оружие и оформляй покупку прямо на сайте.
-        </p>
-
+        <div class="badge">🔥 MM2 ROBLOX SHOP</div>
+        <h1>ТВОЙ ИНВЕНТАРЬ<br><span>СТАНЕТ ЛУЧШЕ</span></h1>
+        <p>Магазин предметов для Murder Mystery 2. Выбирай оружие и связывайся со мной для оформления покупки.</p>
         <div class="buttons">
-
-            <a href="#shop" class="main-button">
-                🛒 Смотреть товары
-            </a>
-
-            <a
-                href="https://t.me/mm2shopsSite"
-                target="_blank"
-                class="telegram-button"
-            >
-                ✈ Telegram
-            </a>
-
+            <a href="#shop" class="main-button">🛒 Смотреть товары</a>
+            <a href="https://t.me/mm2shopsSite" target="_blank" class="telegram-button">✈ Telegram</a>
         </div>
-
     </div>
 
     <div class="hero-card">
-
         <div class="card-glow"></div>
-
-        <img
-            src="green_knife.png"
-            alt="MM2 Knife"
-            class="hero-weapon"
-        >
-
-        <div class="floating-text">
-            MURDER<br>
-            <span>MYSTERY 2</span>
+        <img src="green_knife.png" alt="MM2 Knife" class="hero-weapon">
+        <div class="floating-text">MURDER<br><span>MYSTERY 2</span></div>
+        <div class="product test-product">
+            <div class="product-image"><img src="green_knife.png" alt="Тест"></div>
+            <div class="rarity">TEST • 2 ₽</div>
+            <h3>Тест</h3>
+            <p>Тестовая покупка для проверки оплаты ЮMoney.</p>
+            <div class="bottom"><div class="price">2 ₽</div><a href="#" class="buy" data-product="Тест" data-price="2 ₽">Купить →</a></div>
         </div>
-
     </div>
-
 </section>
-
 
 <section id="shop" class="shop">
-
     <div class="section-title">
-
         <span>НАШ АССОРТИМЕНТ</span>
-
         <h2>ПОПУЛЯРНЫЕ ТОВАРЫ</h2>
-
-        <p>
-            Выбери предмет и оформи заказ через сайт.
-        </p>
-
+        <p>Цены указаны для оформления магазина и могут быть изменены владельцем.</p>
     </div>
-
 
     <div class="products">
-
-        <!-- BIOBLADE -->
-
         <div class="product">
-
-            <div class="product-image">
-                <img src="green_knife.png" alt="BioBlade">
-            </div>
-
-            <div class="rarity">
-                GODLY • KNIFE
-            </div>
-
+            <div class="product-image"><img src="green_knife.png" alt="Green Knife"></div>
+            <div class="rarity">GODLY • KNIFE</div>
             <h3>BioBlade</h3>
-
-            <p>
-                Яркий зелёный нож для инвентаря MM2.
-            </p>
-
-            <div class="bottom">
-
-                <div class="price">
-                    39 ₽
-                </div>
-
-                <a
-                    href="#"
-                    class="buy"
-                    data-product="BioBlade"
-                    data-price="39 ₽"
-                    data-payment="bioblade"
-                >
-                    Купить →
-                </a>
-
-            </div>
-
+            <p>Яркий зелёный нож для инвентаря MM2.</p>
+            <div class="bottom"><div class="price">39 ₽</div><a href="#" class="buy" data-product="BioBlade" data-price="39 ₽">Купить →</a></div>
         </div>
-
-
-        <!-- RAYGUN -->
 
         <div class="product">
-
-            <div class="product-image">
-                <img src="green_gun.png" alt="Raygun">
-            </div>
-
-            <div class="rarity">
-                GODLY • GUN
-            </div>
-
-            <h3>Raygun</h3>
-
-            <p>
-                Чёрно-зелёный пистолет в футуристическом стиле.
-            </p>
-
-            <div class="bottom">
-
-                <div class="price">
-                    399 ₽
-                </div>
-
-                <a
-                    href="#"
-                    class="buy"
-                    data-product="Raygun"
-                    data-price="399 ₽"
-                    data-payment="raygun"
-                >
-                    Купить →
-                </a>
-
-            </div>
-
+            <div class="product-image"><img src="prismatic_gun.png" alt="Prismatic Gun"></div>
+            <div class="rarity">GODLY • GUN</div>
+            <h3>Prismatic</h3>
+            <p>Неоновый пистолет с эффектным дизайном.</p>
+            <div class="bottom"><div class="price">399 ₽</div><a href="#" class="buy" data-product="Prismatic" data-price="399 ₽">Купить →</a></div>
         </div>
-
-
-        <!-- TRAVELER -->
 
         <div class="product">
-
-            <div class="product-image">
-                <img src="pumpkin_gun.png" alt="Traveler's Gun">
-            </div>
-
-            <div class="rarity">
-                LIMITED • GUN
-            </div>
-
-            <h3>Traveler's Gun</h3>
-
-            <p>
-                Уникальный пистолет с необычным дизайном.
-            </p>
-
-            <div class="bottom">
-
-                <div class="price">
-                    8 999 ₽
-                </div>
-
-                <a
-                    href="#"
-                    class="buy"
-                    data-product="Traveler's Gun"
-                    data-price="8 999 ₽"
-                    data-payment="traveler"
-                >
-                    Купить →
-                </a>
-
-            </div>
-
+            <div class="product-image"><img src="green_gun.png" alt="Green Gun"></div>
+            <div class="rarity">GODLY • GUN</div>
+            <h3>Green Blaster</h3>
+            <p>Чёрно-зелёный пистолет в футуристическом стиле.</p>
+            <div class="bottom"><div class="price">249 ₽</div><a href="#" class="buy" data-product="Green Blaster" data-price="249 ₽">Купить →</a></div>
         </div>
-
-
-        <!-- HARVESTER -->
 
         <div class="product">
-
-            <div class="product-image">
-                <img src="green_bow.png" alt="Harvester">
-            </div>
-
-            <div class="rarity">
-                GODLY • WEAPON
-            </div>
-
-            <h3>Harvester</h3>
-
-            <p>
-                Большое оружие с необычным дизайном для MM2.
-            </p>
-
-            <div class="bottom">
-
-                <div class="price">
-                    299 ₽
-                </div>
-
-                <a
-                    href="#"
-                    class="buy"
-                    data-product="Harvester"
-                    data-price="299 ₽"
-                    data-payment="harvester"
-                >
-                    Купить →
-                </a>
-
-            </div>
-
+            <div class="product-image"><img src="pumpkin_gun.png" alt="Pumpkin Gun"></div>
+            <div class="rarity">LIMITED • GUN</div>
+            <h3>Pumpkin</h3>
+            <p>Хэллоуинский пистолет с тыквенным дизайном.</p>
+            <div class="bottom"><div class="price">349 ₽</div><a href="#" class="buy" data-product="Pumpkin" data-price="349 ₽">Купить →</a></div>
         </div>
 
+        <div class="product">
+            <div class="product-image"><img src="green_bow.png" alt="Green Bow"></div>
+            <div class="rarity">GODLY • BOW</div>
+            <h3>Emerald Bow</h3>
+            <p>Большой зелёный лук с необычным дизайном.</p>
+            <div class="bottom"><div class="price">449 ₽</div><a href="#" class="buy" data-product="Emerald Bow" data-price="449 ₽">Купить →</a></div>
+        </div>
     </div>
-
 </section>
-
 
 <section id="about" class="about">
-
-    <div class="section-title">
-
-        <span>ПОЧЕМУ МЫ?</span>
-
-        <h2>
-            ПРОСТО. БЫСТРО. УДОБНО.
-        </h2>
-
-    </div>
-
-
+    <div class="section-title"><span>ПОЧЕМУ МЫ?</span><h2>ПРОСТО. БЫСТРО. УДОБНО.</h2></div>
     <div class="features">
-
-        <div class="feature">
-
-            <div>⚡</div>
-
-            <h3>
-                Быстрая связь
-            </h3>
-
-            <p>
-                После оформления заказа можно связаться с магазином в Telegram.
-            </p>
-
-        </div>
-
-
-        <div class="feature">
-
-            <div>🛡️</div>
-
-            <h3>
-                Уточнение деталей
-            </h3>
-
-            <p>
-                Перед выдачей предмета можно обсудить детали заказа.
-            </p>
-
-        </div>
-
-
-        <div class="feature">
-
-            <div>💎</div>
-
-            <h3>
-                MM2 предметы
-            </h3>
-
-            <p>
-                Ножи, пистолеты и другие предметы для Murder Mystery 2.
-            </p>
-
-        </div>
-
+        <div class="feature"><div>⚡</div><h3>Быстрая связь</h3><p>Напиши мне в Telegram и обсуди нужный предмет.</p></div>
+        <div class="feature"><div>🛡️</div><h3>Уточнение деталей</h3><p>Перед покупкой можно обсудить наличие и условия.</p></div>
+        <div class="feature"><div>💎</div><h3>MM2 предметы</h3><p>Ножи, пистолеты и другие предметы для Murder Mystery 2.</p></div>
     </div>
-
 </section>
-
 
 <section id="contact" class="contact">
-
     <div class="contact-box">
-
-        <div class="telegram-icon">
-            ✈
-        </div>
-
-        <span>
-            ЕСТЬ ВОПРОС?
-        </span>
-
-        <h2>
-            СВЯЖИСЬ СО МНОЙ
-        </h2>
-
-        <p>
-            Для покупки или дополнительной информации напиши мне в Telegram.
-        </p>
-
-        <a
-            href="https://t.me/mm2shopsSite"
-            target="_blank"
-            class="contact-button"
-        >
-            ✈ @mm2shopsSite
-        </a>
-
+        <div class="telegram-icon">✈</div>
+        <span>ЕСТЬ ВОПРОС?</span>
+        <h2>СВЯЖИСЬ СО МНОЙ</h2>
+        <p>Для покупки или дополнительной информации напиши мне в Telegram.</p>
+        <a href="https://t.me/mm2shopsSite" target="_blank" class="contact-button">✈ @mm2shopsSite</a>
     </div>
-
 </section>
 
-
 <footer>
-
-    <div class="footer-logo">
-        <span>MM2</span> SHOP
-    </div>
-
-    <p>
-        Неофициальный магазин предметов Murder Mystery 2.
-    </p>
-
-    <p class="copyright">
-        © 2026 MM2 SHOP
-    </p>
-
+    <div class="footer-logo"><span>MM2</span> SHOP</div>
+    <p>Неофициальный магазин предметов Murder Mystery 2.</p>
+    <p class="copyright">© 2026 MM2 SHOP</p>
 </footer>
 
-
 <script src="script.js"></script>
-
 </body>
 </html>
