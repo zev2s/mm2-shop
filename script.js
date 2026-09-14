@@ -1,833 +1,324 @@
-let currentOrder = null;
-let paymentTimer = null;
+(() => {
+  'use strict';
 
-document.addEventListener('DOMContentLoaded', () => {
+  const products = {
+    'BioBlade': { image: 'green_knife.png', rarity: 'GODLY • KNIFE' },
+    'Raygun': { image: 'green_gun.png', rarity: 'GODLY • GUN' },
+    "Traveler's Gun": { image: 'pumpkin_gun.png', rarity: 'LIMITED • GUN' },
+    'Harvester': { image: 'green_bow.png', rarity: 'GODLY • BOW' }
+  };
 
-    document.querySelectorAll('.buy').forEach(button => {
+  let currentOrder = null;
+  let pollTimer = null;
+  let pollStartedAt = 0;
 
-        button.addEventListener('click', event => {
+  const esc = (value) => String(value ?? '')
+    .replace(/[&<>'"]/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;',
+      "'": '&#39;', '"': '&quot;'
+    }[ch]));
 
-            event.preventDefault();
-
-            const product =
-                button.dataset.product || '';
-
-            const price =
-                button.dataset.price || '';
-
-            const image =
-                button.closest('.product')
-                    ?.querySelector('img')
-                    ?.getAttribute('src') || '';
-
-            openPurchase(
-                product,
-                price,
-                image
-            );
-        });
-
-    });
-
-    createModal();
-
-    const params =
-        new URLSearchParams(
-            window.location.search
-        );
-
-    const returnedOrder =
-        params.get('order');
-
-    if(returnedOrder){
-
-        currentOrder = {
-            id: returnedOrder
-        };
-
-        showModal();
-
-        startPaymentCheck();
-    }
-
-});
-
-
-/* =========================
-   MODAL
-========================= */
-
-function createModal(){
-
-    if(document.getElementById('purchaseModal')){
-        return;
-    }
+  function ensureModal() {
+    if (document.getElementById('purchaseModal')) return;
 
     const modal = document.createElement('div');
-
     modal.id = 'purchaseModal';
-
     modal.className = 'purchase-modal';
-
     modal.innerHTML = `
-
-        <div class="purchase-overlay"></div>
-
-        <div class="purchase-window">
-
-            <button
-                class="close-purchase"
-                id="closePurchase"
-                type="button"
-            >
-                ×
-            </button>
-
-            <div class="purchase-image-box">
-                <img
-                    id="purchaseImage"
-                    src=""
-                    alt="Товар"
-                >
-            </div>
-
-            <div class="purchase-rarity">
-                MM2 ITEM
-            </div>
-
-            <h2 id="purchaseProduct">
-                Товар
-            </h2>
-
-            <div class="purchase-price">
-                <span>Стоимость</span>
-                <strong id="purchasePrice">
-                    0 ₽
-                </strong>
-            </div>
-
-
-            <!-- PAYMENT STEP -->
-
-            <div
-                id="paymentStep"
-                class="payment-step"
-            >
-
-                <div class="payment-title">
-                    💳 Оплата
-                </div>
-
-                <p class="payment-text">
-                    Сначала оплати товар через ЮMoney.
-                    После подтверждения оплаты появятся
-                    поля для Telegram и Roblox ника.
-                </p>
-
-                <button
-                    id="payCard"
-                    class="payment-button"
-                    type="button"
-                >
-                    💳 Оплатить картой
-                </button>
-
-                <button
-                    id="payWallet"
-                    class="payment-button secondary"
-                    type="button"
-                >
-                    🟡 Оплатить через ЮMoney
-                </button>
-
-                <div
-                    id="paymentStatus"
-                    class="payment-status"
-                >
-                    Оплата ещё не начата
-                </div>
-
-            </div>
-
-
-            <!-- USER DATA STEP -->
-
-            <div
-                id="dataStep"
-                class="data-step"
-                style="display:none"
-            >
-
-                <div class="paid-message">
-                    <span>✓</span>
-                    Оплата подтверждена!
-                </div>
-
-                <p class="data-description">
-                    Теперь укажи данные для получения
-                    предмета.
-                </p>
-
-                <form
-                    id="purchaseForm"
-                    class="purchase-form"
-                >
-
-                    <label>
-                        Telegram
-                    </label>
-
-                    <input
-                        id="telegramInput"
-                        type="text"
-                        placeholder="@username"
-                        autocomplete="off"
-                    >
-
-                    <label>
-                        Roblox ник
-                    </label>
-
-                    <input
-                        id="nicknameInput"
-                        type="text"
-                        placeholder="Твой ник в Roblox"
-                        autocomplete="off"
-                    >
-
-                    <button
-                        class="submit-purchase"
-                        type="submit"
-                    >
-                        📦 Отправить данные
-                    </button>
-
-                </form>
-
-                <div
-                    id="formError"
-                    class="form-error"
-                ></div>
-
-            </div>
-
-
-            <div class="purchase-note">
-                После оплаты не закрывай страницу,
-                пока система не подтвердит платёж.
-            </div>
-
+      <div class="purchase-overlay" data-close="1"></div>
+      <div class="purchase-window" role="dialog" aria-modal="true">
+        <button class="close-purchase" type="button" aria-label="Закрыть">×</button>
+        <div class="purchase-image-box">
+          <img id="purchaseImage" src="" alt="Товар">
         </div>
-    `;
+        <div class="purchase-rarity" id="purchaseRarity">MM2 ITEM</div>
+        <h2 id="purchaseTitle">Товар</h2>
+        <div class="purchase-price">
+          <span>Цена</span>
+          <strong id="purchasePrice">0 ₽</strong>
+        </div>
+
+        <div id="paymentStep" class="payment-step">
+          <div class="payment-status waiting" id="paymentStatus">
+            <span class="payment-dot"></span>
+            <div>
+              <b>Ожидаем оплату</b>
+              <small>Сначала оплати товар через ЮMoney.</small>
+            </div>
+          </div>
+          <button class="submit-purchase payment-button" id="payButton" type="button">
+            💳 Оплатить через ЮMoney
+          </button>
+          <p class="purchase-note">После подтверждения оплаты здесь автоматически появятся поля Telegram и Roblox.</p>
+        </div>
+
+        <form id="userDataStep" class="purchase-form" style="display:none">
+          <div class="payment-status paid" id="paidStatus">
+            <span class="payment-dot"></span>
+            <div>
+              <b>Оплата подтверждена ✓</b>
+              <small>Теперь укажи данные для получения заказа.</small>
+            </div>
+          </div>
+          <label for="telegramInput">Telegram</label>
+          <input id="telegramInput" name="telegram" type="text" maxlength="80" placeholder="@username" autocomplete="off" required>
+          <label for="nicknameInput">Roblox ник</label>
+          <input id="nicknameInput" name="nickname" type="text" maxlength="80" placeholder="Твой Roblox ник" autocomplete="off" required>
+          <button class="submit-purchase" type="submit">✅ Оформить заказ</button>
+          <p class="purchase-note">Заказ отправится владельцу только после подтверждённой оплаты.</p>
+        </form>
+      </div>`;
 
     document.body.appendChild(modal);
 
-    document
-        .getElementById('closePurchase')
-        .addEventListener(
-            'click',
-            closePurchase
-        );
+    modal.querySelector('.close-purchase').addEventListener('click', closeModal);
+    modal.querySelector('.purchase-overlay').addEventListener('click', closeModal);
+    modal.querySelector('#payButton').addEventListener('click', openPayment);
+    modal.querySelector('#userDataStep').addEventListener('submit', submitUserData);
+  }
 
-    document
-        .querySelector('.purchase-overlay')
-        .addEventListener(
-            'click',
-            closePurchase
-        );
+  function openModal(product, price) {
+    ensureModal();
+    stopPolling();
+    currentOrder = null;
 
-    document
-        .getElementById('payCard')
-        .addEventListener(
-            'click',
-            () => startPayment('AC')
-        );
+    const data = products[product] || {};
+    const modal = document.getElementById('purchaseModal');
 
-    document
-        .getElementById('payWallet')
-        .addEventListener(
-            'click',
-            () => startPayment('PC')
-        );
+    document.getElementById('purchaseImage').src = data.image || '';
+    document.getElementById('purchaseRarity').textContent = data.rarity || 'MM2 ITEM';
+    document.getElementById('purchaseTitle').textContent = product;
+    document.getElementById('purchasePrice').textContent = price;
 
-    document
-        .getElementById('purchaseForm')
-        .addEventListener(
-            'submit',
-            submitUserData
-        );
-}
+    document.getElementById('paymentStep').style.display = '';
+    document.getElementById('userDataStep').style.display = 'none';
+    setPaymentStatus('waiting', 'Ожидаем оплату', 'Сначала оплати товар через ЮMoney.');
 
-
-/* =========================
-   OPEN PURCHASE
-========================= */
-
-function openPurchase(
-    product,
-    price,
-    image
-){
-
-    const modal =
-        document.getElementById(
-            'purchaseModal'
-        );
-
-    document.getElementById(
-        'purchaseProduct'
-    ).textContent = product;
-
-    document.getElementById(
-        'purchasePrice'
-    ).textContent = price;
-
-    document.getElementById(
-        'purchaseImage'
-    ).src = image || '';
-
-    document.getElementById(
-        'paymentStep'
-    ).style.display = 'block';
-
-    document.getElementById(
-        'dataStep'
-    ).style.display = 'none';
-
-    document.getElementById(
-        'paymentStatus'
-    ).textContent =
-        'Оплата ещё не начата';
-
-    document.getElementById(
-        'formError'
-    ).textContent = '';
-
-    currentOrder = {
-        product,
-        price
-    };
+    document.getElementById('telegramInput').value = '';
+    document.getElementById('nicknameInput').value = '';
 
     modal.classList.add('active');
+    document.body.classList.add('modal-open');
 
-    document.body.classList.add(
-        'modal-open'
-    );
-}
+    createPayment(product, price);
+  }
 
+  function closeModal() {
+    stopPolling();
+    const modal = document.getElementById('purchaseModal');
+    if (modal) modal.classList.remove('active');
+    document.body.classList.remove('modal-open');
+  }
 
-/* =========================
-   CLOSE
-========================= */
+  function setPaymentStatus(type, title, text) {
+    const box = document.getElementById('paymentStatus');
+    if (!box) return;
+    box.className = `payment-status ${type}`;
+    box.innerHTML = `<span class="payment-dot"></span><div><b>${esc(title)}</b><small>${esc(text)}</small></div>`;
+  }
 
-function closePurchase(){
+  async function createPayment(product, price) {
+    const button = document.getElementById('payButton');
+    button.disabled = true;
+    button.textContent = '⏳ Создаём платёж...';
 
-    const modal =
-        document.getElementById(
-            'purchaseModal'
-        );
+    try {
+      const response = await fetch('/api/payment/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product, price })
+      });
 
-    if(modal){
-        modal.classList.remove('active');
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Не удалось создать платёж.');
+      }
+
+      currentOrder = data;
+      button.disabled = false;
+      button.textContent = '💳 Оплатить через ЮMoney';
+      setPaymentStatus('waiting', 'Ожидаем оплату', `Сумма: ${data.sum} ₽. Нажми кнопку оплаты.`);
+      startPolling(data.orderId);
+    } catch (error) {
+      console.error(error);
+      setPaymentStatus('error', 'Ошибка', error.message || 'Не удалось создать платёж.');
+      button.disabled = true;
+      button.textContent = 'Не удалось создать платёж';
+    }
+  }
+
+  function openPayment() {
+    if (!currentOrder || !currentOrder.orderId) return;
+
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'https://yoomoney.ru/quickpay/confirm';
+    form.target = '_blank';
+    form.style.display = 'none';
+
+    const values = {
+      receiver: currentOrder.receiver,
+      'quickpay-form': 'shop',
+      targets: `MM2 SHOP — ${currentOrder.orderId}`,
+      sum: currentOrder.sum,
+      label: currentOrder.label,
+      successURL: `${location.origin}/?payment=success&order=${encodeURIComponent(currentOrder.orderId)}`
+    };
+
+    Object.entries(values).forEach(([name, value]) => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value ?? '';
+      form.appendChild(input);
+    });
+
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+
+    setPaymentStatus('waiting', 'Платёж открыт', 'Оплати в окне ЮMoney. Мы проверяем оплату автоматически.');
+  }
+
+  function startPolling(orderId) {
+    stopPolling();
+    pollStartedAt = Date.now();
+    checkPayment(orderId);
+    pollTimer = setInterval(() => checkPayment(orderId), 3000);
+  }
+
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  async function checkPayment(orderId) {
+    if (!orderId) return;
+
+    if (Date.now() - pollStartedAt > 15 * 60 * 1000) {
+      stopPolling();
+      setPaymentStatus('error', 'Проверка остановлена', 'Если ты уже оплатил, обнови страницу и открой заказ снова.');
+      return;
     }
 
-    document.body.classList.remove(
-        'modal-open'
-    );
+    try {
+      const response = await fetch('/api/payment/status?order=' + encodeURIComponent(orderId), { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || !data.success) return;
 
-    if(paymentTimer){
-        clearInterval(paymentTimer);
-        paymentTimer = null;
+      if (data.status === 'paid') {
+        stopPolling();
+        showDataStep(data.order);
+      }
+    } catch (error) {
+      console.warn('Payment status:', error);
     }
-}
-
-
-/* =========================
-   PAYMENT
-========================= */
-
-async function startPayment(paymentType){
-
-    if(
-        !currentOrder ||
-        !currentOrder.product
-    ){
-        return;
-    }
-
-    const status =
-        document.getElementById(
-            'paymentStatus'
-        );
-
-    const card =
-        document.getElementById(
-            'payCard'
-        );
-
-    const wallet =
-        document.getElementById(
-            'payWallet'
-        );
-
-    card.disabled = true;
-    wallet.disabled = true;
-
-    status.textContent =
-        'Создаём платёж...';
-
-    try{
-
-        const response =
-            await fetch(
-                '/api/payment/create',
-                {
-                    method:'POST',
-                    headers:{
-                        'Content-Type':
-                            'application/json'
-                    },
-                    body:JSON.stringify({
-                        product:
-                            currentOrder.product,
-                        price:
-                            currentOrder.price
-                    })
-                }
-            );
-
-        const data =
-            await response.json();
-
-        if(!response.ok || !data.success){
-
-            throw new Error(
-                data.error ||
-                'Не удалось создать платёж.'
-            );
-        }
-
-        currentOrder.id =
-            data.orderId;
-
-        currentOrder.label =
-            data.label;
-
-        currentOrder.sum =
-            data.sum;
-
-        status.textContent =
-            'Платёж создан. Открываем ЮMoney...';
-
-        /*
-         * ЮMoney требует POST на
-         * https://yoomoney.ru/quickpay/confirm
-         */
-
-        const form =
-            document.createElement('form');
-
-        form.method = 'POST';
-
-        form.action =
-            'https://yoomoney.ru/quickpay/confirm';
-
-        form.target =
-            '_blank';
-
-        addHidden(
-            form,
-            'receiver',
-            data.receiver
-        );
-
-        addHidden(
-            form,
-            'quickpay-form',
-            'button'
-        );
-
-        addHidden(
-            form,
-            'paymentType',
-            paymentType
-        );
-
-        addHidden(
-            form,
-            'sum',
-            data.sum
-        );
-
-        addHidden(
-            form,
-            'label',
-            data.label
-        );
-
-        addHidden(
-            form,
-            'successURL',
-            data.successURL
-        );
-
-        document.body.appendChild(form);
-
-        form.submit();
-
-        form.remove();
-
-        status.textContent =
-            '⏳ Ожидаем подтверждение оплаты...';
-
-        startPaymentCheck();
-
-    }catch(error){
-
-        status.textContent =
-            '❌ ' + error.message;
-
-        card.disabled = false;
-        wallet.disabled = false;
-    }
-}
-
-
-function addHidden(
-    form,
-    name,
-    value
-){
-
-    const input =
-        document.createElement('input');
-
-    input.type = 'hidden';
-
-    input.name = name;
-
-    input.value = value;
-
-    form.appendChild(input);
-}
-
-
-/* =========================
-   CHECK PAYMENT
-========================= */
-
-function startPaymentCheck(){
-
-    if(paymentTimer){
-        clearInterval(paymentTimer);
-    }
-
-    checkPayment();
-
-    paymentTimer =
-        setInterval(
-            checkPayment,
-            3000
-        );
-}
-
-
-async function checkPayment(){
-
-    if(
-        !currentOrder ||
-        !currentOrder.id
-    ){
-        return;
-    }
-
-    try{
-
-        const response =
-            await fetch(
-                '/api/payment/status?order=' +
-                encodeURIComponent(
-                    currentOrder.id
-                ),
-                {
-                    cache:'no-store'
-                }
-            );
-
-        const data =
-            await response.json();
-
-        if(
-            !response.ok ||
-            !data.success
-        ){
-            return;
-        }
-
-        if(
-            data.status === 'paid' ||
-            data.status === 'completed'
-        ){
-
-            if(paymentTimer){
-                clearInterval(paymentTimer);
-                paymentTimer = null;
-            }
-
-            showDataStep();
-
-        }else{
-
-            const status =
-                document.getElementById(
-                    'paymentStatus'
-                );
-
-            if(status){
-
-                status.textContent =
-                    '⏳ Ожидаем подтверждение оплаты...';
-            }
-        }
-
-    }catch(error){
-
-        console.log(
-            'Payment check error:',
-            error
-        );
-    }
-}
-
-
-/* =========================
-   SHOW DATA
-========================= */
-
-function showDataStep(){
-
-    document.getElementById(
-        'paymentStep'
-    ).style.display = 'none';
-
-    document.getElementById(
-        'dataStep'
-    ).style.display = 'block';
-
-    const telegram =
-        document.getElementById(
-            'telegramInput'
-        );
-
-    if(telegram){
-        telegram.focus();
-    }
-}
-
-
-/* =========================
-   SUBMIT DATA
-========================= */
-
-async function submitUserData(event){
-
+  }
+
+  function showDataStep(order) {
+    currentOrder = { ...currentOrder, orderId: order.id };
+    document.getElementById('paymentStep').style.display = 'none';
+    document.getElementById('userDataStep').style.display = 'flex';
+    document.getElementById('telegramInput').focus();
+  }
+
+  async function submitUserData(event) {
     event.preventDefault();
 
-    const telegram =
-        document.getElementById(
-            'telegramInput'
-        ).value.trim();
+    const telegramInput = document.getElementById('telegramInput');
+    const nicknameInput = document.getElementById('nicknameInput');
+    const telegram = telegramInput.value.trim();
+    const nickname = nicknameInput.value.trim();
 
-    const nickname =
-        document.getElementById(
-            'nicknameInput'
-        ).value.trim();
+    telegramInput.classList.remove('input-error');
+    nicknameInput.classList.remove('input-error');
 
-    const errorBox =
-        document.getElementById(
-            'formError'
-        );
+    if (!telegram) telegramInput.classList.add('input-error');
+    if (!nickname) nicknameInput.classList.add('input-error');
+    if (!telegram || !nickname) return;
 
-    errorBox.textContent = '';
-
-    if(!telegram){
-
-        errorBox.textContent =
-            'Укажи Telegram.';
-
-        return;
-    }
-
-    if(!nickname){
-
-        errorBox.textContent =
-            'Укажи Roblox ник.';
-
-        return;
-    }
-
-    const button =
-        document.querySelector(
-            '.submit-purchase'
-        );
-
+    const button = event.currentTarget.querySelector('button[type="submit"]');
     button.disabled = true;
+    button.textContent = '⏳ Сохраняем заказ...';
 
-    button.textContent =
-        'Отправляем...';
+    try {
+      const response = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: currentOrder.orderId,
+          telegram,
+          nickname
+        })
+      });
 
-    try{
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось сохранить заказ.');
 
-        const response =
-            await fetch(
-                '/api/orders',
-                {
-                    method:'POST',
-                    headers:{
-                        'Content-Type':
-                            'application/json'
-                    },
-                    body:JSON.stringify({
-                        orderId:
-                            currentOrder.id,
-                        telegram,
-                        nickname
-                    })
-                }
-            );
-
-        const data =
-            await response.json();
-
-        if(
-            !response.ok ||
-            !data.success
-        ){
-
-            throw new Error(
-                data.error ||
-                'Не удалось отправить данные.'
-            );
-        }
-
-        showSuccess(
-            data.order
-        );
-
-    }catch(error){
-
-        errorBox.textContent =
-            '❌ ' + error.message;
-
-        button.disabled = false;
-
-        button.textContent =
-            '📦 Отправить данные';
+      showSuccess(data.order);
+    } catch (error) {
+      alert(error.message || 'Ошибка оформления заказа.');
+      button.disabled = false;
+      button.textContent = '✅ Оформить заказ';
     }
-}
+  }
 
-
-/* =========================
-   SUCCESS
-========================= */
-
-function showSuccess(order){
-
-    const modal =
-        document.getElementById(
-            'purchaseModal'
-        );
-
-    const window =
-        modal.querySelector(
-            '.purchase-window'
-        );
-
-    window.innerHTML = `
-
-        <div class="success-content">
-
-            <div class="success-icon">
-                ✓
-            </div>
-
-            <div class="success-label">
-                MM2 SHOP
-            </div>
-
-            <h2>
-                Заказ оформлен!
-            </h2>
-
-            <p class="success-main">
-                Оплата подтверждена.
-                Данные получены.
-            </p>
-
-            <div class="success-details">
-
-                <div>
-                    <span>Товар</span>
-                    <strong>
-                        ${escapeHtml(order.product)}
-                    </strong>
-                </div>
-
-                <div>
-                    <span>Цена</span>
-                    <strong>
-                        ${escapeHtml(order.price)}
-                    </strong>
-                </div>
-
-                <div>
-                    <span>Telegram</span>
-                    <strong>
-                        ${escapeHtml(order.telegram)}
-                    </strong>
-                </div>
-
-                <div>
-                    <span>Roblox</span>
-                    <strong>
-                        ${escapeHtml(order.nickname)}
-                    </strong>
-                </div>
-
-            </div>
-
-            <p class="saved-note">
-                Заказ передан владельцу магазина.
-            </p>
-
-            <button
-                class="success-close"
-                onclick="closePurchase()"
-            >
-                Готово
-            </button>
-
+  function showSuccess(order) {
+    const modal = document.getElementById('purchaseModal');
+    modal.innerHTML = `
+      <div class="success-overlay"></div>
+      <div class="success-window">
+        <div class="success-icon">✓</div>
+        <div class="success-label">MM2 SHOP</div>
+        <h2>Заказ принят!</h2>
+        <p class="success-main">Оплата подтверждена, данные получены.</p>
+        <div class="success-details">
+          <div><span>Товар</span><strong>${esc(order.product)}</strong></div>
+          <div><span>Цена</span><strong>${esc(order.price)}</strong></div>
+          <div><span>Telegram</span><strong>${esc(order.telegram)}</strong></div>
+          <div><span>Roblox</span><strong>${esc(order.nickname)}</strong></div>
+          <div><span>Номер заказа</span><strong>${esc(order.id)}</strong></div>
         </div>
-    `;
-}
+        <p class="saved-note">Владелец магазина получил заказ и свяжется с тобой.</p>
+        <button class="success-close" type="button">Закрыть</button>
+      </div>`;
+    modal.classList.add('active');
+    modal.querySelector('.success-close').addEventListener('click', closeModal);
+  }
 
+  function handleSuccessUrl() {
+    const params = new URLSearchParams(location.search);
+    const orderId = params.get('order');
+    if (params.get('payment') !== 'success' || !orderId) return;
 
-/* =========================
-   ESCAPE HTML
-========================= */
+    ensureModal();
+    const modal = document.getElementById('purchaseModal');
+    modal.classList.add('active');
+    document.body.classList.add('modal-open');
+    setPaymentStatus('waiting', 'Проверяем оплату', 'Подожди несколько секунд, пока ЮMoney отправит подтверждение.');
+    startPolling(orderId);
+  }
 
-function escapeHtml(value){
+  document.addEventListener('click', (event) => {
+    const buy = event.target.closest('.buy');
+    if (!buy) return;
+    event.preventDefault();
+    openModal(buy.dataset.product, buy.dataset.price);
+  });
 
-    return String(value ?? '')
-        .replace(/[&<>'"]/g, function(char){
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeModal();
+  });
 
-            return {
-                '&':'&amp;',
-                '<':'&lt;',
-                '>':'&gt;',
-                "'":'&#39;',
-                '"':'&quot;'
-            }[char];
+  document.addEventListener('DOMContentLoaded', () => {
+    handleSuccessUrl();
 
-        });
-}
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) entry.target.classList.add('show');
+      });
+    }, { threshold: 0.08 });
+
+    document.querySelectorAll('.product, .feature, .section-title, .contact-box').forEach(el => observer.observe(el));
+  });
+})();
