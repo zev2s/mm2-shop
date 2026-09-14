@@ -1,1632 +1,1451 @@
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { URL } = require('url');
+(() => {
+  'use strict';
 
-const PORT = Number(process.env.PORT || 3000);
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-const DATABASE_URL = process.env.DATABASE_URL || '';
-const YOOMONEY_RECEIVER = process.env.YOOMONEY_RECEIVER || '';
-const YOOMONEY_NOTIFICATION_SECRET = process.env.YOOMONEY_NOTIFICATION_SECRET || '';
 
-const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
-const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+  /* =========================
+     PRODUCTS
+  ========================== */
 
-if (!ADMIN_PASSWORD) {
-    console.error('ERROR: ADMIN_PASSWORD is not set.');
-    process.exit(1);
-}
+  const products = {
 
-if (!YOOMONEY_RECEIVER) {
-    console.error('ERROR: YOOMONEY_RECEIVER is not set.');
-    process.exit(1);
-}
+    'BioBlade': {
+      image: 'green_knife.png',
+      rarity: 'GODLY • KNIFE'
+    },
 
-if (!YOOMONEY_NOTIFICATION_SECRET) {
-    console.error('ERROR: YOOMONEY_NOTIFICATION_SECRET is not set.');
-    process.exit(1);
-}
+    'Raygun': {
+      image: 'green_gun.png',
+      rarity: 'GODLY • GUN'
+    },
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+    "Traveler's Gun": {
+      image: 'pumpkin_gun.png',
+      rarity: 'LIMITED • GUN'
+    },
 
-if (!fs.existsSync(ORDERS_FILE)) {
-    fs.writeFileSync(ORDERS_FILE, '[]', 'utf8');
-}
+    'Harvester': {
+      image: 'green_bow.png',
+      rarity: 'GODLY • BOW'
+    },
 
-const sessions = new Map();
-let db = null;
-
-/* =========================
-   ТОВАРЫ
-========================= */
-
-const PRODUCTS = {
-    'BioBlade': 39,
-    'Raygun': 399,
-    "Traveler's Gun": 8999,
-    'Harvester': 299,
-    'Тест': 2
-};
-
-/* =========================
-   DATABASE
-========================= */
-
-async function initDb() {
-    if (!DATABASE_URL) {
-        console.log('Database: local JSON');
-        return;
+    'Тест': {
+      image: 'green_knife.png',
+      rarity: 'TEST • 2 ₽'
     }
 
-    try {
-        const { Pool } = require('pg');
-
-        db = new Pool({
-            connectionString: DATABASE_URL,
-            ssl: {
-                rejectUnauthorized: false
-            }
-        });
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS orders (
-                id TEXT PRIMARY KEY,
-                product TEXT NOT NULL,
-                price TEXT NOT NULL,
-                telegram TEXT NOT NULL DEFAULT '',
-                nickname TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'waiting_payment',
-                payment_label TEXT,
-                operation_id TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                paid_at TIMESTAMPTZ
-            )
-        `);
-
-        // Миграция старой таблицы
-        await db.query(`
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'
-        `);
-
-        await db.query(`
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS payment_label TEXT
-        `);
-
-        await db.query(`
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS operation_id TEXT
-        `);
-
-        await db.query(`
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ
-        `);
-
-        await db.query(`
-            ALTER TABLE orders
-            ALTER COLUMN telegram DROP NOT NULL
-        `).catch(() => {});
-
-        await db.query(`
-            ALTER TABLE orders
-            ALTER COLUMN nickname DROP NOT NULL
-        `).catch(() => {});
-
-        console.log('Database: PostgreSQL');
-    } catch (error) {
-        console.error('Database connection failed:', error.message);
-        process.exit(1);
-    }
-}
-
-/* =========================
-   LOCAL JSON
-========================= */
-
-function readOrdersLocal() {
-    try {
-        const data = JSON.parse(
-            fs.readFileSync(ORDERS_FILE, 'utf8')
-        );
-
-        return Array.isArray(data) ? data : [];
-    } catch {
-        return [];
-    }
-}
-
-function writeOrdersLocal(orders) {
-    const temp = ORDERS_FILE + '.tmp';
-
-    fs.writeFileSync(
-        temp,
-        JSON.stringify(orders, null, 2),
-        'utf8'
-    );
-
-    fs.renameSync(temp, ORDERS_FILE);
-}
-
-/* =========================
-   HELPERS
-========================= */
-
-function createId() {
-    return 'MM2-' +
-        Date.now().toString(36).toUpperCase() +
-        '-' +
-        crypto.randomBytes(3).toString('hex').toUpperCase();
-}
-
-function normalizePrice(value) {
-    return Number(
-        String(value)
-            .replace(/[^\d.,]/g, '')
-            .replace(',', '.')
-    );
-}
-
-function formatOrder(row) {
-    if (!row) return null;
-
-    return {
-        id: row.id,
-        product: row.product,
-        price: row.price,
-        telegram: row.telegram || '',
-        nickname: row.nickname || '',
-        status: row.status || 'completed',
-        payment_label: row.payment_label || '',
-        operation_id: row.operation_id || '',
-        date: row.created_at
-            ? new Date(row.created_at).toLocaleString('ru-RU')
-            : (row.date || ''),
-        paid_at: row.paid_at
-            ? new Date(row.paid_at).toLocaleString('ru-RU')
-            : ''
-    };
-}
-
-/* =========================
-   CREATE PAYMENT ORDER
-========================= */
-
-async function createPendingOrder(product, price) {
-    const id = createId();
-    const label = 'MM2_' + id.replace(/[^A-Za-z0-9_-]/g, '');
-
-    if (db) {
-        const result = await db.query(
-            `
-            INSERT INTO orders
-            (
-                id,
-                product,
-                price,
-                telegram,
-                nickname,
-                status,
-                payment_label
-            )
-            VALUES ($1,$2,$3,$4,$5,$6,$7)
-            RETURNING *
-            `,
-            [
-                id,
-                product,
-                String(price) + ' ₽',
-                '',
-                '',
-                'waiting_payment',
-                label
-            ]
-        );
-
-        return formatOrder(result.rows[0]);
-    }
-
-    const orders = readOrdersLocal();
-
-    const order = {
-        id,
-        product,
-        price: String(price) + ' ₽',
-        telegram: '',
-        nickname: '',
-        status: 'waiting_payment',
-        payment_label: label,
-        operation_id: '',
-        date: new Date().toLocaleString('ru-RU'),
-        paid_at: ''
-    };
-
-    orders.push(order);
-    writeOrdersLocal(orders);
-
-    return order;
-}
-
-/* =========================
-   GET ORDER
-========================= */
-
-async function getOrder(id) {
-    if (db) {
-        const result = await db.query(
-            `SELECT * FROM orders WHERE id = $1`,
-            [id]
-        );
-
-        return formatOrder(result.rows[0]);
-    }
-
-    return readOrdersLocal().find(
-        order => order.id === id
-    ) || null;
-}
-
-/* =========================
-   MARK PAYMENT
-========================= */
-
-async function markPaid(label, operationId) {
-    if (db) {
-        const result = await db.query(
-            `
-            UPDATE orders
-            SET
-                status = 'paid',
-                operation_id = $1,
-                paid_at = NOW()
-            WHERE payment_label = $2
-              AND status = 'waiting_payment'
-            RETURNING *
-            `,
-            [operationId, label]
-        );
-
-        return result.rows[0]
-            ? formatOrder(result.rows[0])
-            : null;
-    }
-
-    const orders = readOrdersLocal();
-
-    const order = orders.find(
-        item =>
-            item.payment_label === label &&
-            item.status === 'waiting_payment'
-    );
-
-    if (!order) return null;
-
-    order.status = 'paid';
-    order.operation_id = operationId;
-    order.paid_at = new Date().toLocaleString('ru-RU');
-
-    writeOrdersLocal(orders);
-
-    return order;
-}
-
-/* =========================
-   SAVE USER DATA
-========================= */
-
-async function saveUserData(id, telegram, nickname) {
-    if (db) {
-        const result = await db.query(
-            `
-            UPDATE orders
-            SET
-                telegram = $1,
-                nickname = $2,
-                status = 'completed'
-            WHERE id = $3
-              AND status = 'paid'
-            RETURNING *
-            `,
-            [telegram, nickname, id]
-        );
-
-        return result.rows[0]
-            ? formatOrder(result.rows[0])
-            : null;
-    }
-
-    const orders = readOrdersLocal();
-
-    const order = orders.find(
-        item =>
-            item.id === id &&
-            item.status === 'paid'
-    );
-
-    if (!order) return null;
-
-    order.telegram = telegram;
-    order.nickname = nickname;
-    order.status = 'completed';
-
-    writeOrdersLocal(orders);
-
-    return order;
-}
-
-/* =========================
-   ADMIN
-========================= */
-
-async function getOrders() {
-    if (db) {
-        const result = await db.query(
-            `
-            SELECT *
-            FROM orders
-            ORDER BY created_at DESC
-            `
-        );
-
-        return result.rows.map(formatOrder);
-    }
-
-    return readOrdersLocal()
-        .slice()
-        .reverse()
-        .map(formatOrder);
-}
-
-async function deleteOrder(id) {
-    if (db) {
-        await db.query(
-            `DELETE FROM orders WHERE id = $1`,
-            [id]
-        );
-
-        return;
-    }
-
-    const orders = readOrdersLocal()
-        .filter(order => order.id !== id);
-
-    writeOrdersLocal(orders);
-}
-
-/* =========================
-   HTTP HELPERS
-========================= */
-
-function json(res, status, data) {
-    const text = JSON.stringify(data);
-
-    res.writeHead(status, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'Content-Length': Buffer.byteLength(text)
-    });
-
-    res.end(text);
-}
-
-function readBody(req, limit = 20000) {
-    return new Promise((resolve, reject) => {
-        let body = '';
-
-        req.on('data', chunk => {
-            body += chunk;
-
-            if (body.length > limit) {
-                reject(new Error('payload'));
-                req.destroy();
-            }
-        });
-
-        req.on('end', () => resolve(body));
-        req.on('error', reject);
-    });
-}
-
-function parseCookies(req) {
-    const result = {};
-
-    const cookies = String(
-        req.headers.cookie || ''
-    ).split(';');
-
-    for (const cookie of cookies) {
-        const index = cookie.indexOf('=');
-
-        if (index === -1) continue;
-
-        const key = cookie
-            .slice(0, index)
-            .trim();
-
-        const value = cookie
-            .slice(index + 1)
-            .trim();
-
-        result[key] = decodeURIComponent(value);
-    }
-
-    return result;
-}
-
-function isAdmin(req) {
-    const token = parseCookies(req).admin_session;
-
-    return !!token && sessions.has(token);
-}
-
-/* =========================
-   STATIC FILES
-========================= */
-
-function safePath(requestPath) {
-    let clean;
-
-    try {
-        clean = decodeURIComponent(
-            String(requestPath || '/')
-                .split('?')[0]
-        );
-    } catch {
-        return null;
-    }
-
-    const relative =
-        clean === '/' || clean === ''
-            ? 'index.html'
-            : clean.replace(/^[/\\]+/, '');
-
-    const root = path.resolve(ROOT);
-    const full = path.resolve(root, relative);
+  };
+
+
+  /* =========================
+     TELEGRAM
+  ========================== */
+
+  const TELEGRAM_CHANNEL =
+    'https://t.me/mm2site';
+
+
+  /* =========================
+     STATE
+  ========================== */
+
+  let currentOrder = null;
+
+  let pollTimer = null;
+
+  let pollStartedAt = 0;
+
+
+
+  /* =========================
+     ESCAPE HTML
+  ========================== */
+
+  const esc = (value) =>
+    String(value ?? '')
+      .replace(
+        /[&<>'"]/g,
+        ch => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          "'": '&#39;',
+          '"': '&quot;'
+        }[ch])
+      );
+
+
+
+  /* =========================
+     CREATE PAYMENT MODAL
+  ========================== */
+
+  function ensureModal() {
 
     if (
-        full !== root &&
-        !full.startsWith(root + path.sep)
+      document.getElementById(
+        'purchaseModal'
+      )
     ) {
-        return null;
+      return;
     }
 
-    return full;
-}
 
-function mime(file) {
-    const ext = path.extname(file).toLowerCase();
+    const modal =
+      document.createElement('div');
 
-    const types = {
-        '.html': 'text/html; charset=utf-8',
-        '.js': 'application/javascript; charset=utf-8',
-        '.css': 'text/css; charset=utf-8',
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.webp': 'image/webp',
-        '.svg': 'image/svg+xml',
-        '.ico': 'image/x-icon'
-    };
 
-    return types[ext] || 'application/octet-stream';
-}
+    modal.id =
+      'purchaseModal';
 
-function serveFile(res, file) {
-    fs.readFile(file, (error, data) => {
-        if (error) {
-            return json(res, 404, {
-                error: 'Не найдено'
-            });
-        }
 
-        res.writeHead(200, {
-            'Content-Type': mime(file),
-            'Cache-Control': 'no-cache'
-        });
+    modal.className =
+      'purchase-modal';
 
-        res.end(data);
-    });
-}
 
-/* =========================
-   YOOMONEY SIGNATURE
-========================= */
+    modal.innerHTML = `
 
-function encodeRFC3986(value) {
-    return encodeURIComponent(String(value ?? ''))
-        .replace(/[!'()*]/g, char =>
-            '%' +
-            char.charCodeAt(0)
-                .toString(16)
-                .toUpperCase()
-        );
-}
+      <div
+        class="purchase-overlay"
+        data-close="1"
+      ></div>
 
-function verifyYooMoneySignature(params) {
-    const receivedSign = String(
-        params.sign || ''
-    ).toLowerCase();
 
-    if (!receivedSign) return false;
+      <div
+        class="purchase-window"
+        role="dialog"
+        aria-modal="true"
+      >
 
-    const values = Object.keys(params)
-        .filter(key => key !== 'sign')
-        .sort()
-        .map(key =>
-            key + '=' + encodeRFC3986(params[key])
-        )
-        .join('&');
+        <button
+          class="close-purchase"
+          type="button"
+          aria-label="Закрыть"
+        >
+          ×
+        </button>
 
-    const expectedSign = crypto
-        .createHmac(
-            'sha256',
-            YOOMONEY_NOTIFICATION_SECRET
-        )
-        .update(values, 'utf8')
-        .digest('hex')
-        .toLowerCase();
 
-    if (receivedSign.length !== expectedSign.length) {
-        return false;
-    }
+        <div class="purchase-image-box">
 
-    return crypto.timingSafeEqual(
-        Buffer.from(receivedSign),
-        Buffer.from(expectedSign)
-    );
-}
-
-/* =========================
-   ADMIN PAGE
-========================= */
-
-function adminPage(res) {
-    const html = `<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MM2 SHOP — Админка</title>
-
-<style>
-*{box-sizing:border-box}
-
-body{
-    margin:0;
-    min-height:100vh;
-    background:#070707;
-    color:#fff;
-    font-family:Arial, sans-serif;
-    padding:24px;
-}
-
-.wrap{
-    max-width:1100px;
-    margin:auto;
-}
-
-.card{
-    background:#111;
-    border:1px solid #292929;
-    border-radius:20px;
-    padding:24px;
-}
-
-#login{
-    max-width:430px;
-    margin:10vh auto;
-}
-
-h1{
-    margin-top:0;
-}
-
-input{
-    width:100%;
-    height:50px;
-    padding:0 15px;
-    border-radius:12px;
-    border:1px solid #333;
-    background:#181818;
-    color:#fff;
-    margin:8px 0 15px;
-}
-
-button{
-    border:0;
-    border-radius:11px;
-    padding:12px 16px;
-    cursor:pointer;
-    font-weight:800;
-}
-
-.gold{
-    width:100%;
-    background:#e1b44d;
-    color:#111;
-}
-
-.dark{
-    background:#222;
-    color:#fff;
-}
-
-.delete{
-    background:#401820;
-    color:#ff8793;
-}
-
-.top{
-    display:flex;
-    justify-content:space-between;
-    gap:15px;
-    align-items:center;
-    flex-wrap:wrap;
-}
-
-.order{
-    margin-top:15px;
-    padding:18px;
-    background:#101010;
-    border:1px solid #292929;
-    border-radius:16px;
-}
-
-.grid{
-    display:grid;
-    grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
-    gap:10px;
-    margin-top:15px;
-}
-
-.box{
-    padding:12px;
-    background:#181818;
-    border-radius:10px;
-    color:#999;
-    font-size:12px;
-}
-
-.box b{
-    display:block;
-    color:#fff;
-    margin-top:5px;
-    word-break:break-word;
-}
-
-.status{
-    display:inline-block;
-    padding:6px 10px;
-    border-radius:20px;
-    background:#183b28;
-    color:#76e9a0;
-    font-size:11px;
-}
-
-.waiting{
-    background:#3a3015;
-    color:#f3d36d;
-}
-
-.paid{
-    background:#143b2b;
-    color:#76e9a0;
-}
-
-.empty{
-    margin-top:15px;
-    text-align:center;
-    color:#777;
-}
-
-.actions{
-    display:flex;
-    gap:8px;
-}
-</style>
-</head>
-
-<body>
-
-<div class="wrap">
-
-<div id="login" class="card">
-
-<h2>♛ MM2 SHOP</h2>
-<p>Вход в админ-панель</p>
-
-<input
-    id="password"
-    type="password"
-    placeholder="Пароль"
->
-
-<button
-    class="gold"
-    onclick="login()"
->
-    Войти
-</button>
-
-<div
-    id="loginError"
-    style="color:#ff6675;margin-top:12px"
-></div>
-
-</div>
-
-<div
-    id="panel"
-    style="display:none"
->
-
-<div class="top">
-
-<div>
-<h1>📦 Заказы MM2</h1>
-<p style="color:#777">
-Заказы обновляются автоматически.
-</p>
-</div>
-
-<div class="actions">
-<button class="dark" onclick="loadOrders()">
-↻ Обновить
-</button>
-
-<button class="dark" onclick="logout()">
-Выйти
-</button>
-</div>
-
-</div>
-
-<div
-    class="card"
-    style="margin-top:15px"
->
-Всего заказов:
-<b id="count">0</b>
-</div>
-
-<div id="orders"></div>
-
-</div>
-
-</div>
-
-<script>
-
-function esc(value){
-    return String(value ?? '')
-        .replace(/[&<>'"]/g,function(char){
-            return {
-                '&':'&amp;',
-                '<':'&lt;',
-                '>':'&gt;',
-                "'":'&#39;',
-                '"':'&quot;'
-            }[char];
-        });
-}
-
-function statusText(status){
-    if(status === 'waiting_payment'){
-        return 'Ожидает оплаты';
-    }
-
-    if(status === 'paid'){
-        return 'Оплачено';
-    }
-
-    return 'Данные получены';
-}
-
-function statusClass(status){
-    if(status === 'waiting_payment'){
-        return 'status waiting';
-    }
-
-    if(status === 'paid'){
-        return 'status paid';
-    }
-
-    return 'status';
-}
-
-async function login(){
-
-    const password =
-        document.getElementById('password').value;
-
-    const response = await fetch(
-        '/api/admin/login',
-        {
-            method:'POST',
-            headers:{
-                'Content-Type':'application/json'
-            },
-            body:JSON.stringify({
-                password:password
-            })
-        }
-    );
-
-    if(response.ok){
-
-        document.getElementById('login')
-            .style.display='none';
-
-        document.getElementById('panel')
-            .style.display='block';
-
-        loadOrders();
-
-    }else{
-
-        document.getElementById('loginError')
-            .textContent='❌ Неверный пароль';
-    }
-}
-
-async function loadOrders(){
-
-    const response = await fetch(
-        '/api/admin/orders',
-        {
-            cache:'no-store'
-        }
-    );
-
-    if(response.status === 401){
-
-        document.getElementById('login')
-            .style.display='block';
-
-        document.getElementById('panel')
-            .style.display='none';
-
-        return;
-    }
-
-    const data = await response.json();
-
-    document.getElementById('count')
-        .textContent=data.orders.length;
-
-    const box =
-        document.getElementById('orders');
-
-    if(!data.orders.length){
-
-        box.innerHTML =
-            '<div class="card empty">Пока заказов нет.</div>';
-
-        return;
-    }
-
-    box.innerHTML=data.orders.map(function(order){
-
-        return \`
-        <div class="order">
-
-            <div class="top">
-
-                <b>
-                    Заказ #\${esc(order.id)}
-                </b>
-
-                <span class="\${statusClass(order.status)}">
-                    \${esc(statusText(order.status))}
-                </span>
-
-            </div>
-
-            <div class="grid">
-
-                <div class="box">
-                    🛒 Товар
-                    <b>\${esc(order.product)}</b>
-                </div>
-
-                <div class="box">
-                    💰 Цена
-                    <b>\${esc(order.price)}</b>
-                </div>
-
-                <div class="box">
-                    💳 Платёж
-                    <b>\${esc(order.payment_label || '—')}</b>
-                </div>
-
-                <div class="box">
-                    👤 Telegram
-                    <b>\${esc(order.telegram || 'Ожидается')}</b>
-                </div>
-
-                <div class="box">
-                    🎮 Roblox
-                    <b>\${esc(order.nickname || 'Ожидается')}</b>
-                </div>
-
-                <div class="box">
-                    🕒 Дата
-                    <b>\${esc(order.date)}</b>
-                </div>
-
-                <div class="box">
-                    🔐 ID операции
-                    <b>\${esc(order.operation_id || '—')}</b>
-                </div>
-
-                <div class="box">
-
-                    <button
-                        class="delete"
-                        onclick="deleteOrder('\${esc(order.id)}')"
-                    >
-                        🗑 Удалить
-                    </button>
-
-                </div>
-
-            </div>
+          <img
+            id="purchaseImage"
+            src=""
+            alt="Товар"
+          >
 
         </div>
-        \`;
 
-    }).join('');
-}
 
-async function deleteOrder(id){
+        <div
+          class="purchase-rarity"
+          id="purchaseRarity"
+        >
+          MM2 ITEM
+        </div>
 
-    if(!confirm('Удалить этот заказ?')){
-        return;
-    }
 
-    const response = await fetch(
-        '/api/admin/orders/' +
-        encodeURIComponent(id),
-        {
-            method:'DELETE'
-        }
+        <h2 id="purchaseTitle">
+          Товар
+        </h2>
+
+
+        <div class="purchase-price">
+
+          <span>
+            Цена
+          </span>
+
+          <strong id="purchasePrice">
+            0 ₽
+          </strong>
+
+        </div>
+
+
+
+        <!-- PAYMENT -->
+
+        <div
+          id="paymentStep"
+          class="payment-step"
+        >
+
+          <div
+            class="payment-status waiting"
+            id="paymentStatus"
+          >
+
+            <span class="payment-dot"></span>
+
+            <div>
+
+              <b>
+                Ожидаем оплату
+              </b>
+
+              <small id="paymentHint">
+                Сначала оплати товар через ЮMoney.
+              </small>
+
+            </div>
+
+          </div>
+
+
+          <button
+            class="submit-purchase payment-button"
+            id="payButton"
+            type="button"
+          >
+            💳 Оплатить через ЮMoney
+          </button>
+
+
+          <p
+            class="purchase-note"
+            id="normalPaymentNote"
+          >
+            После оплаты сайт автоматически получит
+            подтверждение от ЮMoney.
+            Нажимать «Я оплатил» не нужно.
+          </p>
+
+        </div>
+
+
+
+        <!-- USER DATA -->
+
+        <form
+          id="userDataStep"
+          class="purchase-form"
+          style="display:none"
+        >
+
+          <div
+            class="payment-status paid"
+            id="paidStatus"
+          >
+
+            <span class="payment-dot"></span>
+
+            <div>
+
+              <b>
+                Оплата подтверждена ✓
+              </b>
+
+              <small>
+                Теперь укажи данные для получения заказа.
+              </small>
+
+            </div>
+
+          </div>
+
+
+          <label for="telegramInput">
+            Telegram
+          </label>
+
+
+          <input
+            id="telegramInput"
+            name="telegram"
+            type="text"
+            maxlength="80"
+            placeholder="@username"
+            autocomplete="off"
+            required
+          >
+
+
+          <label for="nicknameInput">
+            Roblox ник
+          </label>
+
+
+          <input
+            id="nicknameInput"
+            name="nickname"
+            type="text"
+            maxlength="80"
+            placeholder="Твой Roblox ник"
+            autocomplete="off"
+            required
+          >
+
+
+          <button
+            class="submit-purchase"
+            type="submit"
+          >
+            ✅ Оформить заказ
+          </button>
+
+
+          <p class="purchase-note">
+            Заказ отправится владельцу только
+            после подтверждённой оплаты.
+          </p>
+
+        </form>
+
+      </div>
+    `;
+
+
+    document.body.appendChild(modal);
+
+
+    /* CLOSE */
+
+    modal
+      .querySelector(
+        '.close-purchase'
+      )
+      .addEventListener(
+        'click',
+        closeModal
+      );
+
+
+    modal
+      .querySelector(
+        '.purchase-overlay'
+      )
+      .addEventListener(
+        'click',
+        closeModal
+      );
+
+
+    /* PAYMENT */
+
+    modal
+      .querySelector(
+        '#payButton'
+      )
+      .addEventListener(
+        'click',
+        beginPayment
+      );
+
+
+    /* FORM */
+
+    modal
+      .querySelector(
+        '#userDataStep'
+      )
+      .addEventListener(
+        'submit',
+        submitUserData
+      );
+
+  }
+
+
+
+  /* =========================
+     OPEN MODAL
+  ========================== */
+
+  function openModal(
+    product,
+    price
+  ) {
+
+    ensureModal();
+
+    stopPolling();
+
+    currentOrder = null;
+
+
+    const data =
+      products[product] || {};
+
+
+    const modal =
+      document.getElementById(
+        'purchaseModal'
+      );
+
+
+    document.getElementById(
+      'purchaseImage'
+    ).src =
+      data.image || '';
+
+
+    document.getElementById(
+      'purchaseRarity'
+    ).textContent =
+      data.rarity ||
+      'MM2 ITEM';
+
+
+    document.getElementById(
+      'purchaseTitle'
+    ).textContent =
+      product;
+
+
+    document.getElementById(
+      'purchasePrice'
+    ).textContent =
+      price;
+
+
+    /* RESET PAYMENT */
+
+    document.getElementById(
+      'paymentStep'
+    ).style.display = '';
+
+
+    document.getElementById(
+      'payButton'
+    ).style.display = '';
+
+
+    document.getElementById(
+      'normalPaymentNote'
+    ).style.display = '';
+
+
+    document.getElementById(
+      'userDataStep'
+    ).style.display = 'none';
+
+
+    document.getElementById(
+      'payButton'
+    ).disabled = false;
+
+
+    document.getElementById(
+      'payButton'
+    ).textContent =
+      '💳 Оплатить через ЮMoney';
+
+
+    setPaymentStatus(
+      'waiting',
+      'Ожидаем оплату',
+      'Сначала оплати товар через ЮMoney.'
     );
 
-    if(response.ok){
-        loadOrders();
-    }
-}
 
-async function logout(){
+    document.getElementById(
+      'telegramInput'
+    ).value = '';
 
-    await fetch(
-        '/api/admin/logout',
-        {
-            method:'POST'
-        }
+
+    document.getElementById(
+      'nicknameInput'
+    ).value = '';
+
+
+    modal.classList.add(
+      'active'
     );
 
-    location.reload();
-}
 
-document
-    .getElementById('password')
-    .addEventListener('keydown',function(event){
-
-        if(event.key === 'Enter'){
-            login();
-        }
-
-    });
-
-setInterval(function(){
-
-    const panel =
-        document.getElementById('panel');
-
-    if(panel.style.display !== 'none'){
-        loadOrders();
-    }
-
-},15000);
-
-</script>
-
-</body>
-</html>`;
-
-    res.writeHead(200,{
-        'Content-Type':'text/html; charset=utf-8',
-        'Cache-Control':'no-store'
-    });
-
-    res.end(html);
-}
-
-/* =========================
-   REQUEST HANDLER
-========================= */
-
-async function handle(req,res){
-
-    const parsed = new URL(
-        req.url,
-        'http://' +
-        (req.headers.host || 'localhost')
+    document.body.classList.add(
+      'modal-open'
     );
 
-    /* CREATE PAYMENT */
+  }
 
-    if(
-        req.method === 'POST' &&
-        parsed.pathname === '/api/payment/create'
-    ){
 
-        try{
 
-            const input =
-                JSON.parse(await readBody(req));
+  /* =========================
+     CLOSE MODAL
+  ========================== */
 
-            const product =
-                String(input.product || '').trim();
+  function closeModal() {
 
-            const clientPrice =
-                normalizePrice(input.price);
+    stopPolling();
 
-            if(!product){
-                return json(res,400,{
-                    success:false,
-                    error:'Товар не указан.'
-                });
-            }
 
-            if(!PRODUCTS[product]){
-                return json(res,400,{
-                    success:false,
-                    error:'Такого товара нет.'
-                });
-            }
+    const modal =
+      document.getElementById(
+        'purchaseModal'
+      );
 
-            const serverPrice =
-                PRODUCTS[product];
 
-            if(
-                !Number.isFinite(clientPrice) ||
-                clientPrice !== serverPrice
-            ){
-                return json(res,400,{
-                    success:false,
-                    error:'Неверная цена товара.'
-                });
-            }
-
-            const order =
-                await createPendingOrder(
-                    product,
-                    serverPrice
-                );
-
-            const baseUrl =
-                process.env.RENDER_EXTERNAL_URL ||
-                (
-                    'https://' +
-                    (
-                        req.headers.host ||
-                        'mm2-shop.onrender.com'
-                    )
-                );
-
-            return json(res,200,{
-                success:true,
-                orderId:order.id,
-                label:order.payment_label,
-                receiver:YOOMONEY_RECEIVER,
-                sum:serverPrice,
-                successURL:
-                    baseUrl +
-                    '/?payment=success&order=' +
-                    encodeURIComponent(order.id)
-            });
-
-        }catch(error){
-
-            console.error(error);
-
-            return json(res,500,{
-                success:false,
-                error:'Не удалось создать платёж.'
-            });
-        }
+    if (modal) {
+      modal.classList.remove(
+        'active'
+      );
     }
 
-    /* PAYMENT STATUS */
 
-    if(
-        req.method === 'GET' &&
-        parsed.pathname === '/api/payment/status'
-    ){
+    document.body.classList.remove(
+      'modal-open'
+    );
 
-        const id =
-            parsed.searchParams.get('order');
+  }
 
-        if(!id){
-            return json(res,400,{
-                success:false
-            });
-        }
 
-        const order =
-            await getOrder(id);
 
-        if(!order){
-            return json(res,404,{
-                success:false,
-                error:'Заказ не найден.'
-            });
-        }
+  /* =========================
+     PAYMENT STATUS
+  ========================== */
 
-        return json(res,200,{
-            success:true,
-            status:order.status,
-            order:order
-        });
+  function setPaymentStatus(
+    type,
+    title,
+    text
+  ) {
+
+    const box =
+      document.getElementById(
+        'paymentStatus'
+      );
+
+
+    if (!box) {
+      return;
     }
 
-    /* SAVE USER DATA */
 
-    if(
-        req.method === 'POST' &&
-        parsed.pathname === '/api/orders'
-    ){
+    box.className =
+      `payment-status ${type}`;
 
-        try{
 
-            const input =
-                JSON.parse(await readBody(req));
+    box.innerHTML = `
 
-            const id =
-                String(input.orderId || '').trim();
+      <span class="payment-dot"></span>
 
-            const telegram =
-                String(input.telegram || '')
-                    .trim()
-                    .slice(0,80);
+      <div>
 
-            const nickname =
-                String(input.nickname || '')
-                    .trim()
-                    .slice(0,80);
+        <b>
+          ${esc(title)}
+        </b>
 
-            if(
-                !id ||
-                !telegram ||
-                !nickname
-            ){
+        <small>
+          ${esc(text)}
+        </small>
 
-                return json(res,400,{
-                    success:false,
-                    error:'Заполни Telegram и Roblox ник.'
-                });
-            }
+      </div>
 
-            const order =
-                await saveUserData(
-                    id,
-                    telegram,
-                    nickname
-                );
+    `;
 
-            if(!order){
+  }
 
-                return json(res,400,{
-                    success:false,
-                    error:
-                        'Оплата ещё не подтверждена или заказ не найден.'
-                });
-            }
 
-            return json(res,200,{
-                success:true,
-                order:order
-            });
 
-        }catch(error){
+  /* =========================
+     BEGIN PAYMENT
+  ========================== */
 
-            console.error(error);
+  async function beginPayment() {
 
-            return json(res,400,{
-                success:false,
-                error:'Не удалось сохранить заказ.'
-            });
-        }
+    const button =
+      document.getElementById(
+        'payButton'
+      );
+
+
+    if (
+      currentOrder?.orderId
+    ) {
+
+      openPayment();
+
+      return;
     }
 
-    /* YOOMONEY NOTIFICATION */
 
-    if(
-        req.method === 'POST' &&
-        parsed.pathname === '/api/yoomoney/notification'
-    ){
-
-        try{
-
-            const body =
-                await readBody(req,50000);
-
-            const params =
-                Object.fromEntries(
-                    new URLSearchParams(body)
-                );
-
-            console.log(
-                'YuMoney notification:',
-                params
-            );
-
-            if(
-                !verifyYooMoneySignature(params)
-            ){
-
-                console.error(
-                    'YuMoney: invalid signature'
-                );
-
-                return json(res,403,{
-                    success:false
-                });
-            }
-
-            if(
-                params.currency !== '643'
-            ){
-
-                return json(res,400,{
-                    success:false
-                });
-            }
-
-            if(
-                params.unaccepted === 'true'
-            ){
-
-                return json(res,200,{
-                    success:true
-                });
-            }
-
-            const label =
-                String(params.label || '').trim();
-
-            const operationId =
-                String(
-                    params.operation_id || ''
-                ).trim();
-
-            const withdrawAmount =
-                Number(
-                    params.withdraw_amount
-                );
-
-            if(
-                !label ||
-                !operationId ||
-                !Number.isFinite(withdrawAmount)
-            ){
-
-                return json(res,400,{
-                    success:false
-                });
-            }
-
-            const order =
-                await getOrderByLabel(label);
-
-            if(!order){
-
-                console.error(
-                    'YuMoney: order not found:',
-                    label
-                );
-
-                return json(res,200,{
-                    success:true
-                });
-            }
-
-            const expectedPrice =
-                normalizePrice(order.price);
-
-            /*
-              Проверяем именно withdraw_amount:
-              это сумма, которую отправитель
-              реально списал.
-
-              amount может быть меньше из-за
-              комиссии ЮMoney.
-            */
-
-            if(
-                Math.abs(
-                    withdrawAmount -
-                    expectedPrice
-                ) > 0.01
-            ){
-
-                console.error(
-                    'YuMoney: wrong amount',
-                    withdrawAmount,
-                    expectedPrice
-                );
-
-                return json(res,400,{
-                    success:false
-                });
-            }
-
-            await markPaid(
-                label,
-                operationId
-            );
-
-            console.log(
-                'PAYMENT CONFIRMED:',
-                order.id
-            );
-
-            return json(res,200,{
-                success:true
-            });
-
-        }catch(error){
-
-            console.error(
-                'YuMoney notification error:',
-                error
-            );
-
-            return json(res,500,{
-                success:false
-            });
-        }
-    }
-
-    /* ADMIN LOGIN */
-
-    if(
-        req.method === 'POST' &&
-        parsed.pathname === '/api/admin/login'
-    ){
-
-        try{
-
-            const input =
-                JSON.parse(await readBody(req));
-
-            if(
-                String(input.password || '') !==
-                ADMIN_PASSWORD
-            ){
-
-                return json(res,401,{
-                    success:false
-                });
-            }
-
-            const token =
-                crypto.randomBytes(32)
-                    .toString('hex');
-
-            sessions.set(
-                token,
-                Date.now()
-            );
-
-            res.writeHead(200,{
-                'Content-Type':
-                    'application/json; charset=utf-8',
-                'Cache-Control':'no-store',
-                'Set-Cookie':
-                    'admin_session=' +
-                    token +
-                    '; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'
-            });
-
-            return res.end(
-                JSON.stringify({
-                    success:true
-                })
-            );
-
-        }catch{
-
-            return json(res,400,{
-                success:false
-            });
-        }
-    }
-
-    /* ADMIN LOGOUT */
-
-    if(
-        req.method === 'POST' &&
-        parsed.pathname === '/api/admin/logout'
-    ){
-
-        const token =
-            parseCookies(req).admin_session;
-
-        if(token){
-            sessions.delete(token);
-        }
-
-        res.writeHead(200,{
-            'Content-Type':
-                'application/json; charset=utf-8',
-            'Set-Cookie':
-                'admin_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'
-        });
-
-        return res.end(
-            JSON.stringify({
-                success:true
-            })
-        );
-    }
-
-    /* ADMIN ORDERS */
-
-    if(
-        req.method === 'GET' &&
-        parsed.pathname === '/api/admin/orders'
-    ){
-
-        if(!isAdmin(req)){
-
-            return json(res,401,{
-                error:'Требуется вход'
-            });
-        }
-
-        return json(res,200,{
-            orders:await getOrders()
-        });
-    }
-
-    /* DELETE ORDER */
-
-    if(
-        req.method === 'DELETE' &&
-        parsed.pathname.startsWith(
-            '/api/admin/orders/'
+    const product =
+      document
+        .getElementById(
+          'purchaseTitle'
         )
-    ){
+        .textContent
+        .trim();
 
-        if(!isAdmin(req)){
 
-            return json(res,401,{
-                error:'Требуется вход'
-            });
-        }
+    const price =
+      document
+        .getElementById(
+          'purchasePrice'
+        )
+        .textContent
+        .trim();
 
-        const id =
-            decodeURIComponent(
-                parsed.pathname
-                    .split('/')
-                    .pop()
-            );
 
-        await deleteOrder(id);
+    button.disabled = true;
 
-        return json(res,200,{
-            success:true
-        });
-    }
+    button.textContent =
+      '⏳ Создаём платёж...';
 
-    /* ADMIN PAGE */
 
-    if(
-        req.method === 'GET' &&
-        parsed.pathname === '/admin'
-    ){
+    try {
 
-        return adminPage(res);
-    }
+      const response =
+        await fetch(
+          '/api/payment/create',
+          {
+            method: 'POST',
 
-    /* STATIC */
+            headers: {
+              'Content-Type':
+                'application/json'
+            },
 
-    if(req.method === 'GET'){
-
-        const file =
-            safePath(req.url);
-
-        if(
-            file &&
-            fs.existsSync(file) &&
-            fs.statSync(file).isFile()
-        ){
-
-            return serveFile(
-                res,
-                file
-            );
-        }
-    }
-
-    return json(res,404,{
-        error:'Не найдено'
-    });
-}
-
-/* =========================
-   FIND ORDER BY LABEL
-========================= */
-
-async function getOrderByLabel(label){
-
-    if(db){
-
-        const result =
-            await db.query(
-                `
-                SELECT *
-                FROM orders
-                WHERE payment_label = $1
-                LIMIT 1
-                `,
-                [label]
-            );
-
-        return result.rows[0]
-            ? formatOrder(result.rows[0])
-            : null;
-    }
-
-    return readOrdersLocal().find(
-        order =>
-            order.payment_label === label
-    ) || null;
-}
-
-/* =========================
-   START SERVER
-========================= */
-
-(async()=>{
-
-    await initDb();
-
-    const server =
-        http.createServer(
-            (req,res)=>{
-
-                handle(req,res)
-                    .catch(error=>{
-
-                        console.error(error);
-
-                        json(res,500,{
-                            error:
-                                'Внутренняя ошибка сервера'
-                        });
-                    });
-            }
+            body:
+              JSON.stringify({
+                product,
+                price
+              })
+          }
         );
 
-    server.listen(
-        PORT,
-        ()=>{
-            console.log(
-                'MM2 SHOP запущен на порту ' +
-                PORT
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok ||
+        !data.success
+      ) {
+
+        throw new Error(
+          data.error ||
+          'Не удалось создать платёж.'
+        );
+
+      }
+
+
+      currentOrder =
+        data;
+
+
+      setPaymentStatus(
+        'waiting',
+        'Платёж открыт',
+        `Сумма: ${data.sum} ₽. Оплати в окне ЮMoney.`
+      );
+
+
+      startPolling(
+        data.orderId
+      );
+
+
+      openPayment();
+
+    } catch (error) {
+
+      console.error(error);
+
+
+      setPaymentStatus(
+        'error',
+        'Ошибка',
+        error.message ||
+        'Не удалось создать платёж.'
+      );
+
+
+      button.disabled = false;
+
+
+      button.textContent =
+        '💳 Попробовать снова';
+
+    }
+
+  }
+
+
+
+  /* =========================
+     OPEN YOOMONEY
+  ========================== */
+
+  function openPayment() {
+
+    if (
+      !currentOrder ||
+      !currentOrder.orderId
+    ) {
+      return;
+    }
+
+
+    const form =
+      document.createElement(
+        'form'
+      );
+
+
+    form.method =
+      'POST';
+
+
+    form.action =
+      'https://yoomoney.ru/quickpay/confirm';
+
+
+    form.target =
+      '_blank';
+
+
+    form.style.display =
+      'none';
+
+
+    const values = {
+
+      receiver:
+        currentOrder.receiver,
+
+      'quickpay-form':
+        'button',
+
+      paymentType:
+        'AC',
+
+      targets:
+        `MM2 SHOP — ${currentOrder.orderId}`,
+
+      sum:
+        currentOrder.sum,
+
+      label:
+        currentOrder.label,
+
+      successURL:
+        `${location.origin}/?payment=success&order=${encodeURIComponent(
+          currentOrder.orderId
+        )}`
+
+    };
+
+
+    Object.entries(
+      values
+    ).forEach(
+      ([name, value]) => {
+
+        const input =
+          document.createElement(
+            'input'
+          );
+
+
+        input.type =
+          'hidden';
+
+
+        input.name =
+          name;
+
+
+        input.value =
+          value ?? '';
+
+
+        form.appendChild(
+          input
+        );
+
+      }
+    );
+
+
+    document.body.appendChild(
+      form
+    );
+
+
+    form.submit();
+
+
+    form.remove();
+
+
+    setPaymentStatus(
+      'waiting',
+      'Платёж открыт',
+      'Оплати в окне ЮMoney. Мы проверяем оплату автоматически.'
+    );
+
+  }
+
+
+
+  /* =========================
+     START POLLING
+  ========================== */
+
+  function startPolling(
+    orderId
+  ) {
+
+    stopPolling();
+
+
+    pollStartedAt =
+      Date.now();
+
+
+    checkPayment(
+      orderId
+    );
+
+
+    pollTimer =
+      setInterval(
+        () =>
+          checkPayment(
+            orderId
+          ),
+        3000
+      );
+
+  }
+
+
+
+  /* =========================
+     STOP POLLING
+  ========================== */
+
+  function stopPolling() {
+
+    if (pollTimer) {
+
+      clearInterval(
+        pollTimer
+      );
+
+    }
+
+
+    pollTimer = null;
+
+  }
+
+
+
+  /* =========================
+     CHECK PAYMENT
+  ========================== */
+
+  async function checkPayment(
+    orderId
+  ) {
+
+    if (!orderId) {
+      return;
+    }
+
+
+    if (
+      Date.now() -
+      pollStartedAt >
+      15 * 60 * 1000
+    ) {
+
+      stopPolling();
+
+
+      setPaymentStatus(
+        'error',
+        'Проверка остановлена',
+        'Если ты уже оплатил, обнови страницу и открой заказ снова.'
+      );
+
+
+      return;
+
+    }
+
+
+    try {
+
+      const response =
+        await fetch(
+          '/api/payment/status?order=' +
+          encodeURIComponent(
+            orderId
+          ),
+          {
+            cache:
+              'no-store'
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok ||
+        !data.success
+      ) {
+        return;
+      }
+
+
+      if (
+        data.status ===
+        'paid'
+      ) {
+
+        stopPolling();
+
+
+        showDataStep(
+          data.order
+        );
+
+      }
+
+    } catch (error) {
+
+      console.warn(
+        'Payment status:',
+        error
+      );
+
+    }
+
+  }
+
+
+
+  /* =========================
+     SHOW USER DATA STEP
+  ========================== */
+
+  function showDataStep(
+    order
+  ) {
+
+    currentOrder = {
+      ...currentOrder,
+
+      orderId:
+        order.id
+    };
+
+
+    document.getElementById(
+      'paymentStep'
+    ).style.display =
+      'none';
+
+
+    document.getElementById(
+      'userDataStep'
+    ).style.display =
+      'flex';
+
+
+    document.getElementById(
+      'telegramInput'
+    ).focus();
+
+  }
+
+
+
+  /* =========================
+     SUBMIT USER DATA
+  ========================== */
+
+  async function submitUserData(
+    event
+  ) {
+
+    event.preventDefault();
+
+
+    const telegramInput =
+      document.getElementById(
+        'telegramInput'
+      );
+
+
+    const nicknameInput =
+      document.getElementById(
+        'nicknameInput'
+      );
+
+
+    const telegram =
+      telegramInput.value.trim();
+
+
+    const nickname =
+      nicknameInput.value.trim();
+
+
+    telegramInput.classList.remove(
+      'input-error'
+    );
+
+
+    nicknameInput.classList.remove(
+      'input-error'
+    );
+
+
+    if (!telegram) {
+
+      telegramInput.classList.add(
+        'input-error'
+      );
+
+    }
+
+
+    if (!nickname) {
+
+      nicknameInput.classList.add(
+        'input-error'
+      );
+
+    }
+
+
+    if (
+      !telegram ||
+      !nickname
+    ) {
+      return;
+    }
+
+
+    const button =
+      event.currentTarget
+        .querySelector(
+          'button[type="submit"]'
+        );
+
+
+    button.disabled = true;
+
+
+    button.textContent =
+      '⏳ Сохраняем заказ...';
+
+
+    try {
+
+      const response =
+        await fetch(
+          '/api/orders',
+          {
+            method: 'POST',
+
+            headers: {
+              'Content-Type':
+                'application/json'
+            },
+
+            body:
+              JSON.stringify({
+                orderId:
+                  currentOrder.orderId,
+
+                telegram,
+
+                nickname
+              })
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok ||
+        !data.success
+      ) {
+
+        throw new Error(
+          data.error ||
+          'Не удалось сохранить заказ.'
+        );
+
+      }
+
+
+      showSuccess(
+        data.order
+      );
+
+    } catch (error) {
+
+      alert(
+        error.message ||
+        'Ошибка оформления заказа.'
+      );
+
+
+      button.disabled = false;
+
+
+      button.textContent =
+        '✅ Оформить заказ';
+
+    }
+
+  }
+
+
+
+  /* =========================
+     SUCCESS SCREEN
+  ========================== */
+
+  function showSuccess(
+    order
+  ) {
+
+    const modal =
+      document.getElementById(
+        'purchaseModal'
+      );
+
+
+    modal.innerHTML = `
+
+      <div class="success-overlay"></div>
+
+
+      <div class="success-window">
+
+
+        <div class="success-icon">
+          ✓
+        </div>
+
+
+        <div class="success-label">
+          MM2 SHOP
+        </div>
+
+
+        <h2>
+          Заказ принят!
+        </h2>
+
+
+        <p class="success-main">
+          Оплата подтверждена,
+          данные получены.
+        </p>
+
+
+        <div class="success-details">
+
+
+          <div>
+            <span>
+              Товар
+            </span>
+
+            <strong>
+              ${esc(order.product)}
+            </strong>
+          </div>
+
+
+          <div>
+            <span>
+              Цена
+            </span>
+
+            <strong>
+              ${esc(order.price)}
+            </strong>
+          </div>
+
+
+          <div>
+            <span>
+              Telegram
+            </span>
+
+            <strong>
+              ${esc(order.telegram)}
+            </strong>
+          </div>
+
+
+          <div>
+            <span>
+              Roblox
+            </span>
+
+            <strong>
+              ${esc(order.nickname)}
+            </strong>
+          </div>
+
+
+          <div>
+            <span>
+              Номер заказа
+            </span>
+
+            <strong>
+              ${esc(order.id)}
+            </strong>
+          </div>
+
+
+        </div>
+
+
+        <p class="saved-note">
+          Владелец магазина получил заказ
+          и свяжется с тобой.
+        </p>
+
+
+        <!-- TELEGRAM AFTER PAYMENT -->
+
+        <div class="success-telegram-note">
+
+          <strong>
+            ⭐ Отзывы можете посмотреть в ТГК
+          </strong>
+
+          Здесь публикуются свежие новости,
+          обновления магазина и отзывы покупателей.
+
+          <br>
+
+          <a
+            href="${TELEGRAM_CHANNEL}"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="success-telegram-link"
+          >
+            ✈ @mm2site →
+          </a>
+
+        </div>
+
+
+        <button
+          class="success-close"
+          type="button"
+        >
+          Закрыть
+        </button>
+
+
+      </div>
+
+    `;
+
+
+    modal.classList.add(
+      'active'
+    );
+
+
+    modal
+      .querySelector(
+        '.success-close'
+      )
+      .addEventListener(
+        'click',
+        closeModal
+      );
+
+  }
+
+
+
+  /* =========================
+     PAYMENT SUCCESS URL
+  ========================== */
+
+  function handleSuccessUrl() {
+
+    const params =
+      new URLSearchParams(
+        location.search
+      );
+
+
+    const orderId =
+      params.get(
+        'order'
+      );
+
+
+    if (
+      params.get(
+        'payment'
+      ) !== 'success' ||
+      !orderId
+    ) {
+      return;
+    }
+
+
+    ensureModal();
+
+
+    const modal =
+      document.getElementById(
+        'purchaseModal'
+      );
+
+
+    modal.classList.add(
+      'active'
+    );
+
+
+    document.body.classList.add(
+      'modal-open'
+    );
+
+
+    setPaymentStatus(
+      'waiting',
+      'Проверяем оплату',
+      'Подожди несколько секунд, пока ЮMoney отправит подтверждение.'
+    );
+
+
+    startPolling(
+      orderId
+    );
+
+  }
+
+
+
+  /* =========================
+     BUY BUTTONS
+  ========================== */
+
+  document.addEventListener(
+    'click',
+    (event) => {
+
+      const buy =
+        event.target.closest(
+          '.buy'
+        );
+
+
+      if (!buy) {
+        return;
+      }
+
+
+      event.preventDefault();
+
+
+      openModal(
+        buy.dataset.product,
+        buy.dataset.price
+      );
+
+    }
+  );
+
+
+
+  /* =========================
+     ESCAPE
+  ========================== */
+
+  document.addEventListener(
+    'keydown',
+    (event) => {
+
+      if (
+        event.key ===
+        'Escape'
+      ) {
+
+        closeModal();
+
+      }
+
+    }
+  );
+
+
+
+  /* =========================
+     PAGE LOAD
+  ========================== */
+
+  document.addEventListener(
+    'DOMContentLoaded',
+    () => {
+
+      handleSuccessUrl();
+
+
+      const observer =
+        new IntersectionObserver(
+          entries => {
+
+            entries.forEach(
+              entry => {
+
+                if (
+                  entry.isIntersecting
+                ) {
+
+                  entry.target.classList.add(
+                    'show'
+                  );
+
+                }
+
+              }
             );
 
-            console.log(
-                'Админка: /admin'
-            );
-        }
-    );
+          },
+          {
+            threshold:.08
+          }
+        );
+
+
+      document
+        .querySelectorAll(
+          `
+          .product,
+          .feature,
+          .section-title,
+          .contact-box,
+          .telegram-box
+          `
+        )
+        .forEach(
+          el =>
+            observer.observe(
+              el
+            )
+        );
+
+    }
+  );
 
 })();
