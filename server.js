@@ -1163,7 +1163,7 @@ async function handle(req,res){
                 });
             }
 
-            const paid = await markPaid(id,'TEST_IFRAME_MANUAL');
+            const paid = await markPaid(order.payment_label, 'TEST_IFRAME_MANUAL');
 
             if(!paid){
                 return json(res,400,{
