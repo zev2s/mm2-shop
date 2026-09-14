@@ -202,3 +202,77 @@ nav a:hover:after {
     }
 
 }
+/* =========================================
+   ТЕСТОВАЯ НАДПИСЬ ВНУТРИ ШАПКИ
+   ========================================= */
+
+header {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+
+  width: 100% !important;
+  height: 68px !important;
+
+  box-sizing: border-box;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 0 6%;
+
+  z-index: 1000;
+}
+
+/* Текст предупреждения */
+header .test-banner {
+  position: absolute;
+
+  top: 50%;
+  left: 50%;
+
+  transform: translate(-50%, -50%);
+
+  width: auto;
+  max-width: 40%;
+
+  margin: 0;
+  padding: 0;
+
+  color: #ffb8c0;
+
+  font-size: 12px;
+  font-weight: 900;
+
+  letter-spacing: 0.7px;
+
+  text-align: center;
+
+  white-space: nowrap;
+
+  background: transparent;
+  border: none;
+
+  z-index: 5;
+
+  pointer-events: none;
+}
+
+
+/* Чтобы логотип и меню были поверх фона */
+header .logo,
+header nav {
+  position: relative;
+  z-index: 10;
+}
+
+
+/* На маленьких экранах */
+@media (max-width: 800px) {
+  header .test-banner {
+    max-width: 35%;
+    font-size: 9px;
+    letter-spacing: 0.3px;
+  }
+}
