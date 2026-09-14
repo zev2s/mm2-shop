@@ -1142,49 +1142,6 @@ async function handle(req,res){
         }
     }
 
-    /* TEST PAYMENT — fixed YuMoney iframe */
-    if(
-        req.method === 'POST' &&
-        parsed.pathname === '/api/test/confirm'
-    ){
-        try{
-            const input = JSON.parse(await readBody(req));
-            const id = String(input.orderId || '').trim();
-            const order = await getOrder(id);
-
-            if(
-                !order ||
-                order.product !== 'Тест' ||
-                normalizePrice(order.price) !== 2
-            ){
-                return json(res,400,{
-                    success:false,
-                    error:'Тестовый заказ не найден.'
-                });
-            }
-
-            const paid = await markPaid(order.payment_label, 'TEST_IFRAME_MANUAL');
-
-            if(!paid){
-                return json(res,400,{
-                    success:false,
-                    error:'Заказ уже подтверждён.'
-                });
-            }
-
-            return json(res,200,{
-                success:true,
-                order:paid
-            });
-        }catch(error){
-            console.error('Test payment error:',error);
-            return json(res,400,{
-                success:false,
-                error:'Не удалось подтвердить тестовую оплату.'
-            });
-        }
-    }
-
     /* PAYMENT STATUS */
 
     if(
