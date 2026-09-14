@@ -1,1265 +1,833 @@
-// ======================================================
-// MM2 SHOP
-// ЮMoney → подтверждение оплаты → данные пользователя
-// ======================================================
+let currentOrder = null;
+let paymentTimer = null;
 
+document.addEventListener('DOMContentLoaded', () => {
 
-// ======================================================
-// ПЛАВНАЯ ПРОКРУТКА
-// ======================================================
+    document.querySelectorAll('.buy').forEach(button => {
 
-document
-    .querySelectorAll('a[href^="#"]')
-    .forEach(link => {
+        button.addEventListener('click', event => {
 
-        link.addEventListener(
-            "click",
-            event => {
+            event.preventDefault();
 
-                const target =
-                    document.querySelector(
-                        link.getAttribute("href")
-                    );
+            const product =
+                button.dataset.product || '';
 
+            const price =
+                button.dataset.price || '';
 
-                if (!target) return;
+            const image =
+                button.closest('.product')
+                    ?.querySelector('img')
+                    ?.getAttribute('src') || '';
 
-
-                event.preventDefault();
-
-
-                target.scrollIntoView({
-                    behavior:"smooth",
-                    block:"start"
-                });
-
-            }
-        );
+            openPurchase(
+                product,
+                price,
+                image
+            );
+        });
 
     });
 
+    createModal();
 
-// ======================================================
-// АНИМАЦИИ
-// ======================================================
-
-const animatedElements =
-    document.querySelectorAll(
-        ".product, .feature, .contact-box, .section-title"
-    );
-
-
-if (
-    "IntersectionObserver" in window
-) {
-
-    const observer =
-        new IntersectionObserver(
-            entries => {
-
-                entries.forEach(
-                    entry => {
-
-                        if (
-                            entry.isIntersecting
-                        ) {
-
-                            entry.target
-                                .classList
-                                .add("show");
-
-                        }
-
-                    }
-                );
-
-            },
-            {
-                threshold:0.12
-            }
+    const params =
+        new URLSearchParams(
+            window.location.search
         );
 
+    const returnedOrder =
+        params.get('order');
 
-    animatedElements.forEach(
-        element =>
-            observer.observe(
-                element
-            )
-    );
-
-}
-
-
-// ======================================================
-// ТЕКУЩИЙ ЗАКАЗ
-// ======================================================
-
-let currentOrder = null;
-
-
-// ======================================================
-// MODAL
-// ======================================================
-
-const modal =
-    document.createElement(
-        "div"
-    );
-
-
-modal.className =
-    "purchase-modal";
-
-
-modal.innerHTML = `
-
-<div class="purchase-overlay"></div>
-
-<div class="purchase-window">
-
-    <button
-        class="close-purchase"
-        type="button"
-    >
-        ×
-    </button>
-
-
-    <div class="purchase-image-box">
-
-        <img
-            id="purchaseImage"
-            src=""
-            alt="Товар"
-        >
-
-    </div>
-
-
-    <div class="purchase-rarity">
-        MM2 ITEM
-    </div>
-
-
-    <h2 id="purchaseProduct">
-        Товар
-    </h2>
-
-
-    <div class="purchase-price">
-
-        <span>
-            Цена
-        </span>
-
-        <strong id="purchasePrice">
-            0 ₽
-        </strong>
-
-    </div>
-
-
-    <!-- ШАГ 1 -->
-
-    <div
-        id="paymentStep"
-        class="payment-step"
-    >
-
-        <div class="step-number">
-            1
-        </div>
-
-        <div class="step-title">
-            Оплати заказ
-        </div>
-
-        <p class="step-description">
-            Перейди на страницу ЮMoney и
-            оплати указанную сумму.
-        </p>
-
-
-        <button
-            id="payButton"
-            class="pay-button"
-            type="button"
-        >
-            💳 Перейти к оплате
-        </button>
-
-
-        <div
-            id="paymentWaiting"
-            class="payment-waiting"
-        >
-
-            <div class="spinner"></div>
-
-            <strong>
-                Ожидаем оплату...
-            </strong>
-
-            <span>
-                После оплаты страница
-                автоматически продолжит оформление.
-            </span>
-
-        </div>
-
-    </div>
-
-
-    <!-- ШАГ 2 -->
-
-    <div
-        id="dataStep"
-        class="data-step"
-    >
-
-        <div class="step-number">
-            2
-        </div>
-
-        <div class="step-title">
-            Укажи данные
-        </div>
-
-        <p class="step-description">
-            Оплата подтверждена.
-            Теперь укажи Telegram и ник Roblox.
-        </p>
-
-
-        <div class="purchase-form">
-
-            <label>
-                👤 Юз в Telegram
-            </label>
-
-            <input
-                id="telegramUsername"
-                type="text"
-                placeholder="@username"
-                maxlength="50"
-                autocomplete="off"
-            >
-
-
-            <label>
-                🎮 Ник в Roblox
-            </label>
-
-            <input
-                id="gameNickname"
-                type="text"
-                placeholder="Ник в Roblox"
-                maxlength="50"
-                autocomplete="off"
-            >
-
-        </div>
-
-
-        <button
-            id="submitPurchase"
-            class="submit-purchase"
-            type="button"
-        >
-            ✅ Отправить данные
-        </button>
-
-
-        <div
-            id="orderError"
-            class="order-error"
-        ></div>
-
-    </div>
-
-
-    <div class="purchase-note">
-        🔒 Данные нужны только для связи и выдачи предмета.
-    </div>
-
-</div>
-
-`;
-
-
-document.body.appendChild(
-    modal
-);
-
-
-// ======================================================
-// ELEMENTS
-// ======================================================
-
-const purchaseImage =
-    document.getElementById(
-        "purchaseImage"
-    );
-
-const purchaseProduct =
-    document.getElementById(
-        "purchaseProduct"
-    );
-
-const purchasePrice =
-    document.getElementById(
-        "purchasePrice"
-    );
-
-const payButton =
-    document.getElementById(
-        "payButton"
-    );
-
-const paymentWaiting =
-    document.getElementById(
-        "paymentWaiting"
-    );
-
-const dataStep =
-    document.getElementById(
-        "dataStep"
-    );
-
-const telegramUsername =
-    document.getElementById(
-        "telegramUsername"
-    );
-
-const gameNickname =
-    document.getElementById(
-        "gameNickname"
-    );
-
-const submitPurchase =
-    document.getElementById(
-        "submitPurchase"
-    );
-
-const orderError =
-    document.getElementById(
-        "orderError"
-    );
-
-
-// ======================================================
-// CLOSE
-// ======================================================
-
-function closePurchaseModal() {
-
-    modal.classList.remove(
-        "active"
-    );
-
-    document.body.classList.remove(
-        "modal-open"
-    );
-
-}
-
-
-document
-    .querySelector(
-        ".close-purchase"
-    )
-    .addEventListener(
-        "click",
-        closePurchaseModal
-    );
-
-
-document
-    .querySelector(
-        ".purchase-overlay"
-    )
-    .addEventListener(
-        "click",
-        closePurchaseModal
-    );
-
-
-document.addEventListener(
-    "keydown",
-    event => {
-
-        if (
-            event.key === "Escape"
-        ) {
-
-            closePurchaseModal();
-
-        }
-
-    }
-);
-
-
-// ======================================================
-// OPEN PURCHASE
-// ======================================================
-
-document.addEventListener(
-    "click",
-    async event => {
-
-        const button =
-            event.target.closest(
-                ".buy"
-            );
-
-
-        if (!button) return;
-
-
-        event.preventDefault();
-
-
-        const card =
-            button.closest(
-                ".product"
-            );
-
-
-        const image =
-            card
-                ? card.querySelector(
-                    ".product-image img"
-                )
-                : null;
-
-
-        const product =
-            button.dataset.product;
-
-
-        const price =
-            button.dataset.price;
-
-
-        if (
-            !product ||
-            !price
-        ) {
-
-            return;
-
-        }
-
+    if(returnedOrder){
 
         currentOrder = {
-
-            product,
-
-            price,
-
-            image:
-                image
-                    ? image.src
-                    : "",
-
-            id:null
-
+            id: returnedOrder
         };
 
+        showModal();
 
-        purchaseProduct.textContent =
-            product;
+        startPaymentCheck();
+    }
 
-
-        purchasePrice.textContent =
-            price;
-
-
-        purchaseImage.src =
-            currentOrder.image;
+});
 
 
-        // Сбрасываем состояние
+/* =========================
+   MODAL
+========================= */
 
-        paymentWaiting
-            .classList
-            .remove(
-                "active"
-            );
+function createModal(){
+
+    if(document.getElementById('purchaseModal')){
+        return;
+    }
+
+    const modal = document.createElement('div');
+
+    modal.id = 'purchaseModal';
+
+    modal.className = 'purchase-modal';
+
+    modal.innerHTML = `
+
+        <div class="purchase-overlay"></div>
+
+        <div class="purchase-window">
+
+            <button
+                class="close-purchase"
+                id="closePurchase"
+                type="button"
+            >
+                ×
+            </button>
+
+            <div class="purchase-image-box">
+                <img
+                    id="purchaseImage"
+                    src=""
+                    alt="Товар"
+                >
+            </div>
+
+            <div class="purchase-rarity">
+                MM2 ITEM
+            </div>
+
+            <h2 id="purchaseProduct">
+                Товар
+            </h2>
+
+            <div class="purchase-price">
+                <span>Стоимость</span>
+                <strong id="purchasePrice">
+                    0 ₽
+                </strong>
+            </div>
 
 
-        dataStep
-            .classList
-            .remove(
-                "active"
-            );
+            <!-- PAYMENT STEP -->
+
+            <div
+                id="paymentStep"
+                class="payment-step"
+            >
+
+                <div class="payment-title">
+                    💳 Оплата
+                </div>
+
+                <p class="payment-text">
+                    Сначала оплати товар через ЮMoney.
+                    После подтверждения оплаты появятся
+                    поля для Telegram и Roblox ника.
+                </p>
+
+                <button
+                    id="payCard"
+                    class="payment-button"
+                    type="button"
+                >
+                    💳 Оплатить картой
+                </button>
+
+                <button
+                    id="payWallet"
+                    class="payment-button secondary"
+                    type="button"
+                >
+                    🟡 Оплатить через ЮMoney
+                </button>
+
+                <div
+                    id="paymentStatus"
+                    class="payment-status"
+                >
+                    Оплата ещё не начата
+                </div>
+
+            </div>
 
 
-        payButton
-            .classList
-            .remove(
-                "hidden"
-            );
+            <!-- USER DATA STEP -->
+
+            <div
+                id="dataStep"
+                class="data-step"
+                style="display:none"
+            >
+
+                <div class="paid-message">
+                    <span>✓</span>
+                    Оплата подтверждена!
+                </div>
+
+                <p class="data-description">
+                    Теперь укажи данные для получения
+                    предмета.
+                </p>
+
+                <form
+                    id="purchaseForm"
+                    class="purchase-form"
+                >
+
+                    <label>
+                        Telegram
+                    </label>
+
+                    <input
+                        id="telegramInput"
+                        type="text"
+                        placeholder="@username"
+                        autocomplete="off"
+                    >
+
+                    <label>
+                        Roblox ник
+                    </label>
+
+                    <input
+                        id="nicknameInput"
+                        type="text"
+                        placeholder="Твой ник в Roblox"
+                        autocomplete="off"
+                    >
+
+                    <button
+                        class="submit-purchase"
+                        type="submit"
+                    >
+                        📦 Отправить данные
+                    </button>
+
+                </form>
+
+                <div
+                    id="formError"
+                    class="form-error"
+                ></div>
+
+            </div>
 
 
-        orderError.textContent =
-            "";
+            <div class="purchase-note">
+                После оплаты не закрывай страницу,
+                пока система не подтвердит платёж.
+            </div>
 
+        </div>
+    `;
 
-        telegramUsername.value =
-            "";
+    document.body.appendChild(modal);
 
-        gameNickname.value =
-            "";
-
-
-        modal.classList.add(
-            "active"
+    document
+        .getElementById('closePurchase')
+        .addEventListener(
+            'click',
+            closePurchase
         );
 
-
-        document.body.classList.add(
-            "modal-open"
+    document
+        .querySelector('.purchase-overlay')
+        .addEventListener(
+            'click',
+            closePurchase
         );
 
+    document
+        .getElementById('payCard')
+        .addEventListener(
+            'click',
+            () => startPayment('AC')
+        );
 
-        payButton.disabled =
-            true;
+    document
+        .getElementById('payWallet')
+        .addEventListener(
+            'click',
+            () => startPayment('PC')
+        );
 
-
-        payButton.textContent =
-            "⏳ Создаём оплату...";
-
-
-        try {
-
-            const response =
-                await fetch(
-                    "/api/payment/create",
-                    {
-
-                        method:"POST",
-
-                        headers:{
-                            "Content-Type":
-                                "application/json"
-                        },
-
-                        body:
-                            JSON.stringify({
-
-                                product,
-
-                                price
-
-                            })
-
-                    }
-                );
+    document
+        .getElementById('purchaseForm')
+        .addEventListener(
+            'submit',
+            submitUserData
+        );
+}
 
 
-            const data =
-                await response.json();
+/* =========================
+   OPEN PURCHASE
+========================= */
+
+function openPurchase(
+    product,
+    price,
+    image
+){
+
+    const modal =
+        document.getElementById(
+            'purchaseModal'
+        );
+
+    document.getElementById(
+        'purchaseProduct'
+    ).textContent = product;
+
+    document.getElementById(
+        'purchasePrice'
+    ).textContent = price;
+
+    document.getElementById(
+        'purchaseImage'
+    ).src = image || '';
+
+    document.getElementById(
+        'paymentStep'
+    ).style.display = 'block';
+
+    document.getElementById(
+        'dataStep'
+    ).style.display = 'none';
+
+    document.getElementById(
+        'paymentStatus'
+    ).textContent =
+        'Оплата ещё не начата';
+
+    document.getElementById(
+        'formError'
+    ).textContent = '';
+
+    currentOrder = {
+        product,
+        price
+    };
+
+    modal.classList.add('active');
+
+    document.body.classList.add(
+        'modal-open'
+    );
+}
 
 
-            if (
-                !response.ok ||
-                !data.success
-            ) {
+/* =========================
+   CLOSE
+========================= */
 
-                throw new Error(
-                    data.error ||
-                    "Не удалось создать оплату."
-                );
+function closePurchase(){
 
-            }
+    const modal =
+        document.getElementById(
+            'purchaseModal'
+        );
 
+    if(modal){
+        modal.classList.remove('active');
+    }
 
-            currentOrder.id =
-                data.orderId;
+    document.body.classList.remove(
+        'modal-open'
+    );
 
-
-            currentOrder.paymentUrl =
-                data.paymentUrl;
-
-
-            payButton.disabled =
-                false;
-
-
-            payButton.textContent =
-                "💳 Перейти к оплате";
+    if(paymentTimer){
+        clearInterval(paymentTimer);
+        paymentTimer = null;
+    }
+}
 
 
-        } catch (error) {
+/* =========================
+   PAYMENT
+========================= */
 
-            orderError.textContent =
-                "❌ " +
-                error.message;
+async function startPayment(paymentType){
 
+    if(
+        !currentOrder ||
+        !currentOrder.product
+    ){
+        return;
+    }
 
-            orderError.style.display =
-                "block";
+    const status =
+        document.getElementById(
+            'paymentStatus'
+        );
 
+    const card =
+        document.getElementById(
+            'payCard'
+        );
 
-            payButton.textContent =
-                "Попробовать снова";
+    const wallet =
+        document.getElementById(
+            'payWallet'
+        );
 
+    card.disabled = true;
+    wallet.disabled = true;
 
-            payButton.disabled =
-                false;
+    status.textContent =
+        'Создаём платёж...';
 
+    try{
+
+        const response =
+            await fetch(
+                '/api/payment/create',
+                {
+                    method:'POST',
+                    headers:{
+                        'Content-Type':
+                            'application/json'
+                    },
+                    body:JSON.stringify({
+                        product:
+                            currentOrder.product,
+                        price:
+                            currentOrder.price
+                    })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if(!response.ok || !data.success){
+
+            throw new Error(
+                data.error ||
+                'Не удалось создать платёж.'
+            );
         }
 
+        currentOrder.id =
+            data.orderId;
+
+        currentOrder.label =
+            data.label;
+
+        currentOrder.sum =
+            data.sum;
+
+        status.textContent =
+            'Платёж создан. Открываем ЮMoney...';
+
+        /*
+         * ЮMoney требует POST на
+         * https://yoomoney.ru/quickpay/confirm
+         */
+
+        const form =
+            document.createElement('form');
+
+        form.method = 'POST';
+
+        form.action =
+            'https://yoomoney.ru/quickpay/confirm';
+
+        form.target =
+            '_blank';
+
+        addHidden(
+            form,
+            'receiver',
+            data.receiver
+        );
+
+        addHidden(
+            form,
+            'quickpay-form',
+            'button'
+        );
+
+        addHidden(
+            form,
+            'paymentType',
+            paymentType
+        );
+
+        addHidden(
+            form,
+            'sum',
+            data.sum
+        );
+
+        addHidden(
+            form,
+            'label',
+            data.label
+        );
+
+        addHidden(
+            form,
+            'successURL',
+            data.successURL
+        );
+
+        document.body.appendChild(form);
+
+        form.submit();
+
+        form.remove();
+
+        status.textContent =
+            '⏳ Ожидаем подтверждение оплаты...';
+
+        startPaymentCheck();
+
+    }catch(error){
+
+        status.textContent =
+            '❌ ' + error.message;
+
+        card.disabled = false;
+        wallet.disabled = false;
     }
-);
+}
 
 
-// ======================================================
-// OPEN YOOMONEY
-// ======================================================
+function addHidden(
+    form,
+    name,
+    value
+){
 
-payButton.addEventListener(
-    "click",
-    () => {
+    const input =
+        document.createElement('input');
 
-        if (
-            !currentOrder ||
-            !currentOrder.paymentUrl
-        ) {
+    input.type = 'hidden';
 
-            return;
+    input.name = name;
 
-        }
+    input.value = value;
 
-
-        // Открываем ЮMoney
-        // в новой вкладке
-
-        window.open(
-            currentOrder.paymentUrl,
-            "_blank"
-        );
+    form.appendChild(input);
+}
 
 
-        payButton.classList.add(
-            "hidden"
-        );
+/* =========================
+   CHECK PAYMENT
+========================= */
 
+function startPaymentCheck(){
 
-        paymentWaiting.classList.add(
-            "active"
-        );
-
-
-        startPaymentPolling();
-
-    }
-);
-
-
-// ======================================================
-// POLL PAYMENT
-// ======================================================
-
-let paymentPollingTimer =
-    null;
-
-
-function startPaymentPolling() {
-
-    if (
-        paymentPollingTimer
-    ) {
-
-        clearInterval(
-            paymentPollingTimer
-        );
-
+    if(paymentTimer){
+        clearInterval(paymentTimer);
     }
 
+    checkPayment();
 
-    let attempts = 0;
-
-
-    paymentPollingTimer =
+    paymentTimer =
         setInterval(
-            async () => {
-
-                attempts++;
-
-
-                if (
-                    attempts > 180
-                ) {
-
-                    clearInterval(
-                        paymentPollingTimer
-                    );
-
-                    paymentWaiting
-                        .classList
-                        .remove(
-                            "active"
-                        );
-
-
-                    payButton
-                        .classList
-                        .remove(
-                            "hidden"
-                        );
-
-
-                    payButton.textContent =
-                        "💳 Проверить оплату";
-
-
-                    return;
-
-                }
-
-
-                if (
-                    !currentOrder ||
-                    !currentOrder.id
-                ) {
-
-                    return;
-
-                }
-
-
-                try {
-
-                    const response =
-                        await fetch(
-                            "/api/payment/status?id=" +
-                            encodeURIComponent(
-                                currentOrder.id
-                            ),
-                            {
-                                cache:
-                                    "no-store"
-                            }
-                        );
-
-
-                    const data =
-                        await response.json();
-
-
-                    if (
-                        data.status ===
-                        "paid_waiting_data"
-                        ||
-                        data.status ===
-                        "completed"
-                    ) {
-
-                        clearInterval(
-                            paymentPollingTimer
-                        );
-
-
-                        paymentWaiting
-                            .classList
-                            .remove(
-                                "active"
-                            );
-
-
-                        showDataStep();
-
-                    }
-
-                } catch {
-
-                    // Продолжаем проверять
-
-                }
-
-            },
+            checkPayment,
             3000
         );
-
 }
 
 
-// ======================================================
-// DATA STEP
-// ======================================================
+async function checkPayment(){
 
-function showDataStep() {
-
-    dataStep.classList.add(
-        "active"
-    );
-
-
-    setTimeout(
-        () => {
-
-            telegramUsername.focus();
-
-        },
-        200
-    );
-
-}
-
-
-// ======================================================
-// ERROR
-// ======================================================
-
-function showError(
-    message,
-    input
-) {
-
-    orderError.textContent =
-        "❌ " + message;
-
-
-    orderError.style.display =
-        "block";
-
-
-    if (input) {
-
-        input.focus();
-
-        input.classList.add(
-            "input-error"
-        );
-
-
-        setTimeout(
-            () => {
-
-                input.classList.remove(
-                    "input-error"
-                );
-
-            },
-            600
-        );
-
+    if(
+        !currentOrder ||
+        !currentOrder.id
+    ){
+        return;
     }
 
-}
+    try{
 
-
-// ======================================================
-// SAVE DATA
-// ======================================================
-
-submitPurchase.addEventListener(
-    "click",
-    async () => {
-
-        if (
-            !currentOrder ||
-            !currentOrder.id ||
-            submitPurchase.disabled
-        ) {
-
-            return;
-
-        }
-
-
-        let telegram =
-            telegramUsername.value
-                .trim();
-
-
-        const nickname =
-            gameNickname.value
-                .trim();
-
-
-        if (!telegram) {
-
-            showError(
-                "Укажи юз в Telegram.",
-                telegramUsername
+        const response =
+            await fetch(
+                '/api/payment/status?order=' +
+                encodeURIComponent(
+                    currentOrder.id
+                ),
+                {
+                    cache:'no-store'
+                }
             );
 
+        const data =
+            await response.json();
+
+        if(
+            !response.ok ||
+            !data.success
+        ){
             return;
-
         }
 
+        if(
+            data.status === 'paid' ||
+            data.status === 'completed'
+        ){
 
-        if (
-            !telegram.startsWith("@")
-        ) {
+            if(paymentTimer){
+                clearInterval(paymentTimer);
+                paymentTimer = null;
+            }
 
-            telegram =
-                "@" + telegram;
+            showDataStep();
 
-        }
+        }else{
 
-
-        if (!nickname) {
-
-            showError(
-                "Укажи ник в Roblox.",
-                gameNickname
-            );
-
-            return;
-
-        }
-
-
-        submitPurchase.disabled =
-            true;
-
-
-        submitPurchase.textContent =
-            "⏳ Сохраняем...";
-
-
-        orderError.style.display =
-            "none";
-
-
-        try {
-
-            const response =
-                await fetch(
-                    "/api/orders",
-                    {
-
-                        method:"POST",
-
-                        headers:{
-                            "Content-Type":
-                                "application/json"
-                        },
-
-                        body:
-                            JSON.stringify({
-
-                                orderId:
-                                    currentOrder.id,
-
-                                telegram,
-
-                                nickname
-
-                            })
-
-                    }
+            const status =
+                document.getElementById(
+                    'paymentStatus'
                 );
 
+            if(status){
 
-            const data =
-                await response.json();
-
-
-            if (
-                !response.ok ||
-                !data.success
-            ) {
-
-                throw new Error(
-                    data.error ||
-                    "Не удалось сохранить данные."
-                );
-
+                status.textContent =
+                    '⏳ Ожидаем подтверждение оплаты...';
             }
-
-
-            clearInterval(
-                paymentPollingTimer
-            );
-
-
-            closePurchaseModal();
-
-
-            showSuccess(
-                data.order
-            );
-
-
-        } catch (error) {
-
-            showError(
-                error.message
-            );
-
-
-        } finally {
-
-            submitPurchase.disabled =
-                false;
-
-
-            submitPurchase.textContent =
-                "✅ Отправить данные";
-
         }
 
+    }catch(error){
+
+        console.log(
+            'Payment check error:',
+            error
+        );
     }
-);
-
-
-// ======================================================
-// SUCCESS
-// ======================================================
-
-function showSuccess(
-    order
-) {
-
-    const success =
-        document.createElement(
-            "div"
-        );
-
-
-    success.className =
-        "success-modal active";
-
-
-    success.innerHTML = `
-
-<div class="success-overlay"></div>
-
-<div class="success-window">
-
-    <div class="success-icon">
-        ✓
-    </div>
-
-
-    <div class="success-label">
-        ОПЛАТА ПОДТВЕРЖДЕНА
-    </div>
-
-
-    <h2>
-        Заказ оформлен! 🎉
-    </h2>
-
-
-    <p class="success-main">
-        Данные сохранены.
-        Скоро с тобой свяжутся.
-    </p>
-
-
-    <div class="success-details">
-
-        <div>
-
-            <span>
-                🛒 Товар
-            </span>
-
-            <strong>
-                ${escapeHtml(
-                    order.product
-                )}
-            </strong>
-
-        </div>
-
-
-        <div>
-
-            <span>
-                💰 Цена
-            </span>
-
-            <strong>
-                ${escapeHtml(
-                    order.price
-                )}
-            </strong>
-
-        </div>
-
-
-        <div>
-
-            <span>
-                👤 Telegram
-            </span>
-
-            <strong>
-                ${escapeHtml(
-                    order.telegram
-                )}
-            </strong>
-
-        </div>
-
-
-        <div>
-
-            <span>
-                🎮 Roblox
-            </span>
-
-            <strong>
-                ${escapeHtml(
-                    order.nickname
-                )}
-            </strong>
-
-        </div>
-
-    </div>
-
-
-    <div class="saved-note">
-        ✅ Заказ сохранён в админ-панели
-    </div>
-
-
-    <a
-        href="https://t.me/mm2shopsSite"
-        target="_blank"
-        class="success-close"
-    >
-        ✈ Написать в Telegram
-    </a>
-
-</div>
-
-`;
-
-
-    document.body.appendChild(
-        success
-    );
-
-
-    success
-        .querySelector(
-            ".success-overlay"
-        )
-        .addEventListener(
-            "click",
-            () => {
-
-                success.remove();
-
-            }
-        );
-
 }
 
 
-// ======================================================
-// ESCAPE HTML
-// ======================================================
+/* =========================
+   SHOW DATA
+========================= */
 
-function escapeHtml(
-    value
-) {
+function showDataStep(){
 
-    return String(value)
-        .replace(
-            /[&<>'"]/g,
-            char => ({
+    document.getElementById(
+        'paymentStep'
+    ).style.display = 'none';
 
-                "&":"&amp;",
-                "<":"&lt;",
-                ">":"&gt;",
-                "'":"&#39;",
-                '"':"&quot;"
+    document.getElementById(
+        'dataStep'
+    ).style.display = 'block';
 
-            }[char])
+    const telegram =
+        document.getElementById(
+            'telegramInput'
         );
 
+    if(telegram){
+        telegram.focus();
+    }
 }
 
 
-// ======================================================
-// 3D КАРТОЧКИ
-// ======================================================
+/* =========================
+   SUBMIT DATA
+========================= */
 
-document
-    .querySelectorAll(
-        ".product"
-    )
-    .forEach(card => {
+async function submitUserData(event){
 
-        card.addEventListener(
-            "mousemove",
-            event => {
+    event.preventDefault();
 
-                const rect =
-                    card.getBoundingClientRect();
+    const telegram =
+        document.getElementById(
+            'telegramInput'
+        ).value.trim();
 
+    const nickname =
+        document.getElementById(
+            'nicknameInput'
+        ).value.trim();
 
-                const x =
-                    (
-                        event.clientX -
-                        rect.left
-                    ) /
-                    rect.width -
-                    0.5;
-
-
-                const y =
-                    (
-                        event.clientY -
-                        rect.top
-                    ) /
-                    rect.height -
-                    0.5;
-
-
-                card.style.transform =
-                    `
-                    perspective(700px)
-                    rotateX(${-y * 6}deg)
-                    rotateY(${x * 6}deg)
-                    translateY(-8px)
-                    `;
-
-            }
+    const errorBox =
+        document.getElementById(
+            'formError'
         );
 
+    errorBox.textContent = '';
 
-        card.addEventListener(
-            "mouseleave",
-            () => {
+    if(!telegram){
 
-                card.style.transform =
-                    "";
+        errorBox.textContent =
+            'Укажи Telegram.';
 
-            }
+        return;
+    }
+
+    if(!nickname){
+
+        errorBox.textContent =
+            'Укажи Roblox ник.';
+
+        return;
+    }
+
+    const button =
+        document.querySelector(
+            '.submit-purchase'
         );
 
-    });
+    button.disabled = true;
 
+    button.textContent =
+        'Отправляем...';
 
-// ======================================================
-// ПРЕДОТВРАЩАЕМ СЛУЧАЙНЫЙ ВЫХОД
-// ======================================================
+    try{
 
-window.addEventListener(
-    "beforeunload",
-    () => {
-
-        if (
-            paymentPollingTimer
-        ) {
-
-            clearInterval(
-                paymentPollingTimer
+        const response =
+            await fetch(
+                '/api/orders',
+                {
+                    method:'POST',
+                    headers:{
+                        'Content-Type':
+                            'application/json'
+                    },
+                    body:JSON.stringify({
+                        orderId:
+                            currentOrder.id,
+                        telegram,
+                        nickname
+                    })
+                }
             );
 
+        const data =
+            await response.json();
+
+        if(
+            !response.ok ||
+            !data.success
+        ){
+
+            throw new Error(
+                data.error ||
+                'Не удалось отправить данные.'
+            );
         }
 
+        showSuccess(
+            data.order
+        );
+
+    }catch(error){
+
+        errorBox.textContent =
+            '❌ ' + error.message;
+
+        button.disabled = false;
+
+        button.textContent =
+            '📦 Отправить данные';
     }
-);
+}
+
+
+/* =========================
+   SUCCESS
+========================= */
+
+function showSuccess(order){
+
+    const modal =
+        document.getElementById(
+            'purchaseModal'
+        );
+
+    const window =
+        modal.querySelector(
+            '.purchase-window'
+        );
+
+    window.innerHTML = `
+
+        <div class="success-content">
+
+            <div class="success-icon">
+                ✓
+            </div>
+
+            <div class="success-label">
+                MM2 SHOP
+            </div>
+
+            <h2>
+                Заказ оформлен!
+            </h2>
+
+            <p class="success-main">
+                Оплата подтверждена.
+                Данные получены.
+            </p>
+
+            <div class="success-details">
+
+                <div>
+                    <span>Товар</span>
+                    <strong>
+                        ${escapeHtml(order.product)}
+                    </strong>
+                </div>
+
+                <div>
+                    <span>Цена</span>
+                    <strong>
+                        ${escapeHtml(order.price)}
+                    </strong>
+                </div>
+
+                <div>
+                    <span>Telegram</span>
+                    <strong>
+                        ${escapeHtml(order.telegram)}
+                    </strong>
+                </div>
+
+                <div>
+                    <span>Roblox</span>
+                    <strong>
+                        ${escapeHtml(order.nickname)}
+                    </strong>
+                </div>
+
+            </div>
+
+            <p class="saved-note">
+                Заказ передан владельцу магазина.
+            </p>
+
+            <button
+                class="success-close"
+                onclick="closePurchase()"
+            >
+                Готово
+            </button>
+
+        </div>
+    `;
+}
+
+
+/* =========================
+   ESCAPE HTML
+========================= */
+
+function escapeHtml(value){
+
+    return String(value ?? '')
+        .replace(/[&<>'"]/g, function(char){
+
+            return {
+                '&':'&amp;',
+                '<':'&lt;',
+                '>':'&gt;',
+                "'":'&#39;',
+                '"':'&quot;'
+            }[char];
+
+        });
+}
